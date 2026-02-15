@@ -2,4 +2,4 @@ node_modules/
 dist/
 dist-app/
 dist-electron/
-js信令服务器/
+js信令服务器/node_modules/
