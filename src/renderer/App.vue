@@ -45,18 +45,20 @@
       <main class="app-main">
         <!-- 首页内容 -->
         <div class="page-content" :class="{ active: activeMenu === 'home' }" v-show="activeMenu === 'home'">
-          <div class="dashboard">
-            <div class="stats-card">
-              <h3>连接状态</h3>
-              <p>信令服务器: {{ isSignalingConnected ? '已连接' : '未连接' }}</p>
-              <p>房间状态: {{ currentRoomId ? '已加入' : '未加入' }}</p>
-              <p>对等连接: {{ connectedPeersCount }} 个</p>
-            </div>
-            <div class="stats-card">
-              <h3>传输统计</h3>
-              <p>总传输: {{ totalTransfers }}</p>
-              <p>已完成: {{ completedTransfers }}</p>
-              <p>进行中: {{ inProgressTransfers }}</p>
+          <!-- 空白首页 -->
+          <div class="empty-home">
+            <div class="empty-content">
+              <div class="empty-icon">📁</div>
+              <h2>欢迎使用 EP2P</h2>
+              <p>跨网络 P2P 文件传输应用</p>
+              <div class="empty-actions">
+                <button @click="changeMenu('transfer')" class="btn btn-primary">
+                  开始文件传输
+                </button>
+                <button @click="changeMenu('config')" class="btn btn-secondary">
+                  配置设置
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -545,37 +547,79 @@ const closeConfigDialog = () => {
 }
 
 .transfer-panel:first-child {
-  flex: 2;
+  flex: 3;
   border-right: 1px solid #e2e8f0;
   min-width: 0;
+  padding: 0;
 }
 
 .transfer-panel:last-child {
-  flex: 1;
-  min-width: 350px;
-  max-width: none;
+  flex: 2;
+  min-width: 300px;
+  max-width: 450px;
+  padding: 0;
+}
+
+/* 响应式调整 */
+@media (max-width: 1024px) {
+  .transfer-panel:first-child {
+    flex: 2;
+  }
+  
+  .transfer-panel:last-child {
+    flex: 1;
+    min-width: 280px;
+  }
+}
+
+@media (max-width: 768px) {
+  .transfer-content {
+    flex-direction: column;
+  }
+  
+  .transfer-panel {
+    min-height: 400px;
+  }
+  
+  .transfer-panel:last-child {
+    min-width: 100%;
+    max-width: 100%;
+  }
 }
 
 /* 配置页面样式 */
 .config-section {
-  background: white;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
   border-radius: 16px;
   padding: 2rem;
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.06);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+  border: 1px solid #f1f5f9;
   max-width: 800px;
-  margin: 0 auto;
+  margin: 2rem auto;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .config-section h3 {
-  color: #2c3e50;
+  color: #1e293b;
   margin-top: 0;
   margin-bottom: 1.5rem;
-  font-size: 1.3rem;
-  font-weight: 600;
+  font-size: 1.25rem;
+  font-weight: 700;
   position: relative;
-  padding-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.config-section h3::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  background: linear-gradient(135deg, #3b82f6 0%, #10b981 100%);
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .config-section h3::after {
@@ -583,89 +627,338 @@ const closeConfigDialog = () => {
   position: absolute;
   bottom: 0;
   left: 0;
-  width: 60px;
-  height: 3px;
-  background: linear-gradient(90deg, #3498db, #2ecc71);
-  border-radius: 2px;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, #3b82f6, #10b981, transparent);
+  border-radius: 1px;
 }
 
 .form-group {
   margin-bottom: 2rem;
+  position: relative;
 }
 
 .form-group label {
   display: block;
   margin-bottom: 0.75rem;
   font-weight: 600;
-  color: #495057;
-  font-size: 1rem;
-  display: flex;
-  align-items: center;
-}
-
-.form-group label::before {
-  content: '•';
-  color: #3498db;
-  margin-right: 8px;
-  font-size: 1.2rem;
+  color: #374151;
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
 }
 
 .form-input {
   width: 100%;
-  padding: 0.9rem 1.2rem;
-  border: 2px solid #e1e5e9;
-  border-radius: 10px;
-  font-size: 1.1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  font-size: 1rem;
   transition: all 0.3s ease;
   box-sizing: border-box;
-  background: #fafafa;
+  background: #f9fafb;
+  color: #374151;
+  font-family: inherit;
 }
 
 .form-input:focus {
   outline: none;
-  border-color: #3498db;
-  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.2);
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   background: white;
+  transform: translateY(-1px);
+}
+
+.form-input::placeholder {
+  color: #9ca3af;
 }
 
 .input-with-button {
   display: flex;
-  gap: 0.75rem;
-  align-items: stretch;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .input-with-button .form-input {
   flex: 1;
+  min-width: 250px;
 }
 
 .config-actions {
   display: flex;
   justify-content: center;
-  margin-top: 2rem;
+  margin-top: 3rem;
   padding-top: 2rem;
-  border-top: 1px solid #eee;
+  border-top: 1px solid #f1f5f9;
   gap: 1rem;
 }
 
-/* 按钮样式 */
-.btn {
-  padding: 0.8rem 1.5rem;
+/* 配置页面按钮样式 */
+.config-section .btn {
+  padding: 1rem 2rem;
   border: none;
-  border-radius: 10px;
+  border-radius: 12px;
   cursor: pointer;
   font-size: 1rem;
   font-weight: 600;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.3s ease;
   text-transform: none;
-  letter-spacing: 0.5px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 0.5rem;
-  min-height: 44px;
+  font-family: inherit;
 }
 
+.config-section .btn-primary {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.config-section .btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+}
+
+.config-section .btn-secondary {
+  background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(107, 114, 128, 0.3);
+}
+
+.config-section .btn-secondary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(107, 114, 128, 0.4);
+}
+
+.config-section .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .config-section {
+    margin: 1rem;
+    padding: 1.5rem;
+  }
+  
+  .input-with-button {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .input-with-button .form-input {
+    min-width: auto;
+  }
+  
+  .config-section .btn {
+    padding: 0.875rem 1.5rem;
+    font-size: 0.875rem;
+  }
+  
+  .config-actions {
+    flex-direction: column;
+  }
+  
+  .config-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* 暗色模式支持 */
+@media (prefers-color-scheme: dark) {
+  .config-section {
+    background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+    border-color: #374151;
+  }
+  
+  .config-section h3 {
+    color: #e5e7eb;
+  }
+  
+  .form-group label {
+    color: #9ca3af;
+  }
+  
+  .form-input {
+    background: #374151;
+    border-color: #4b5563;
+    color: #e5e7eb;
+  }
+  
+  .form-input:focus {
+    background: #1f2937;
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.1);
+  }
+  
+  .form-input::placeholder {
+    color: #6b7280;
+  }
+  
+  .config-actions {
+    border-top-color: #374151;
+  }
+  
+  .config-section .btn-primary {
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+  }
+  
+    .config-section .btn-secondary {
+    box-shadow: 0 4px 12px rgba(107, 114, 128, 0.4);
+  }
+}
+
+/* 空白首页样式 */
+.empty-home {
+  min-height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.empty-content {
+  text-align: center;
+  max-width: 500px;
+  padding: 3rem;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  border: 1px solid #f1f5f9;
+}
+
+.empty-icon {
+  font-size: 4rem;
+  margin-bottom: 1.5rem;
+  animation: bounce 2s ease-in-out infinite;
+}
+
+@keyframes bounce {
+  0%, 20%, 50%, 80%, 100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-20px);
+  }
+  60% {
+    transform: translateY(-10px);
+  }
+}
+
+.empty-content h2 {
+  color: #1e293b;
+  margin: 0 0 0.75rem 0;
+  font-weight: 700;
+  font-size: 1.75rem;
+  letter-spacing: -0.025em;
+}
+
+.empty-content p {
+  color: #6b7280;
+  margin: 0 0 2.5rem 0;
+  font-size: 1.1rem;
+  line-height: 1.5;
+}
+
+.empty-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.empty-actions .btn {
+  padding: 1rem 1.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: 12px;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.empty-actions .btn-primary {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.empty-actions .btn-secondary {
+  background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(107, 114, 128, 0.3);
+}
+
+.empty-actions .btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .empty-home {
+    padding: 1rem;
+  }
+  
+  .empty-content {
+    padding: 2rem;
+    margin: 1rem;
+  }
+  
+  .empty-icon {
+    font-size: 3rem;
+  }
+  
+  .empty-content h2 {
+    font-size: 1.4rem;
+  }
+  
+  .empty-content p {
+    font-size: 1rem;
+  }
+  
+  .empty-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .empty-actions .btn {
+    justify-content: center;
+  }
+}
+
+/* 暗色模式支持 */
+@media (prefers-color-scheme: dark) {
+  .empty-content {
+    background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+    border-color: #374151;
+  }
+  
+  .empty-content h2 {
+    color: #e5e7eb;
+  }
+  
+  .empty-content p {
+    color: #9ca3af;
+  }
+  
+  .empty-actions .btn-primary {
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+  }
+  
+  .empty-actions .btn-secondary {
+    box-shadow: 0 4px 12px rgba(107, 114, 128, 0.4);
+  }
+}
+
+/* 按钮基础样式 */
 .btn:hover {
   transform: translateY(-2px);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
