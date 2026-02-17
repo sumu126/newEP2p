@@ -19,110 +19,121 @@
         </button>
       </div>
       <div class="status-item">
-        <span>当前房间:</span>
-        <span>{{ currentRoomId || '未加入' }}</span>
-      </div>
-      <div class="status-item">
         <span>用户ID:</span>
         <span>{{ userId || '未分配' }}</span>
       </div>
     </div>
 
-    <!-- 房间管理 -->
-    <div class="room-management">
-      <h3>房间管理</h3>
+    <!-- 共享文件管理 -->
+    <div class="share-management">
+      <h3>共享文件管理</h3>
       <div class="input-group">
         <input 
-          v-model="roomIdInput" 
-          placeholder="输入房间ID" 
+          v-model="shareDirPath" 
+          placeholder="共享目录路径" 
           class="input-field"
-          :disabled="!isSignalingConnected"
+          readonly
         />
         <button 
-          @click="joinRoom" 
-          class="btn btn-primary"
-          :disabled="!roomIdInput || !isSignalingConnected"
-        >
-          加入房间
-        </button>
-        <button 
-          @click="createRoom" 
+          @click="selectShareDirectory" 
           class="btn btn-secondary"
           :disabled="!isSignalingConnected"
         >
-          创建新房间
+          选择共享目录
         </button>
+        <button 
+          @click="registerSharedFiles" 
+          class="btn btn-primary"
+          :disabled="!shareDirPath || !isSignalingConnected"
+        >
+          注册共享文件
+        </button>
+      </div>
+      
+      <!-- 我的共享文件列表 -->
+      <div class="my-shared-files" v-if="sharedFiles.length > 0">
+        <h4>我的共享文件 ({{ sharedFiles.length }})</h4>
+        <div class="file-list">
+          <div 
+            v-for="file in sharedFiles" 
+            :key="file.hash"
+            class="file-item"
+          >
+            <span class="file-name">{{ file.fileName }}</span>
+            <span class="file-size">{{ formatFileSize(file.fileSize) }}</span>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- 房间用户列表 -->
-    <div class="room-users" v-if="currentRoomId">
-      <h3>房间用户</h3>
-      <div class="user-list">
-        <div 
-          v-for="user in roomUsers" 
-          :key="user.id"
-          class="user-item"
-          :class="{ 
-            connected: user.isConnected,
-            'current-user': user.id === userId 
-          }"
+    <!-- 文件搜索 -->
+    <div class="file-search">
+      <h3>搜索全网文件</h3>
+      <div class="input-group">
+        <input 
+          v-model="searchQuery" 
+          placeholder="输入文件名关键词" 
+          class="input-field"
+          @keyup.enter="searchFiles"
+          :disabled="!isSignalingConnected"
+        />
+        <button 
+          @click="searchFiles" 
+          class="btn btn-primary"
+          :disabled="!searchQuery || !isSignalingConnected"
         >
-          <span class="user-name">
-            {{ user.name || user.id }} 
-            <span v-if="user.id === userId" class="current-user-label">(我)</span>
-          </span>
-          <span class="user-status">{{ user.isConnected ? '已连接' : '未连接' }}</span>
-          <button 
-            v-if="!user.isConnected && user.id !== userId"
-            @click="connectToUser(user.id)"
-            class="btn btn-small"
+          搜索
+        </button>
+      </div>
+      
+      <!-- 搜索结果 -->
+      <div class="search-results" v-if="searchResults.length > 0">
+        <h4>搜索结果 ({{ searchResults.length }})</h4>
+        <div class="result-list">
+          <div 
+            v-for="result in searchResults" 
+            :key="result.hash"
+            class="result-item"
           >
-            连接
-          </button>
-          <span v-else-if="user.id === userId" class="current-user-status">当前用户</span>
-          <span v-else-if="user.id !== userId && user.isConnected" class="connection-status">已连接</span>
+            <div class="result-info">
+              <span class="file-name">{{ result.fileName }}</span>
+              <span class="file-size">{{ formatFileSize(result.fileSize) }}</span>
+              <span class="node-count">可用节点: {{ result.nodeCount }}</span>
+            </div>
+            <button 
+              @click="downloadFile(result)"
+              class="btn btn-download"
+              :disabled="!isSignalingConnected"
+            >
+              下载
+            </button>
+          </div>
         </div>
       </div>
     </div>
 
     <!-- 文件传输 -->
-    <div class="file-transfer" v-if="roomUsers.some(u => u.isConnected)">
+    <div class="file-transfer">
       <h3>文件传输</h3>
       <div class="input-group">
-        <select 
-          v-model="selectedPeerId" 
-          class="input-field"
-        >
-          <option value="">选择接收用户</option>
-          <option 
-            v-for="user in roomUsers.filter(u => u.isConnected)" 
-            :key="user.id"
-            :value="user.id"
-          >
-            {{ user.name || user.id }}
-          </option>
-        </select>
         <input 
           type="file" 
           ref="fileInput" 
           @change="handleFileSelect" 
           class="file-input"
-          :disabled="!selectedPeerId"
         />
         <button 
           @click="selectFile" 
           class="btn btn-secondary"
-          :disabled="!selectedPeerId"
         >
           选择文件
         </button>
         <button 
-          @click="sendFile" 
+          @click="uploadFile" 
           class="btn btn-primary"
-          :disabled="!selectedFile || !selectedPeerId"
+          :disabled="!selectedFile"
         >
-          发送文件
+          上传分享
         </button>
       </div>
     </div>
@@ -181,6 +192,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { io, Socket } from 'socket.io-client'
+import { IPC_CHANNELS } from '../../shared/constants'
 
 // 定义属性
 const props = defineProps<{ signalingServerUrl?: string }>()
@@ -193,11 +205,14 @@ const signalingServerUrl = computed(() => {
 
 // 响应式数据
 const isSignalingConnected = ref(false)
-const currentRoomId = ref('')
-const roomIdInput = ref('')
 const userId = ref('')
-const roomUsers = ref<any[]>([])
 const p2pConnections = ref<any[]>([])
+
+// 新增：文件搜索和共享相关数据
+const shareDirPath = ref('')
+const sharedFiles = ref<any[]>([])
+const searchQuery = ref('')
+const searchResults = ref<any[]>([])
 const selectedPeerId = ref('')
 const selectedFile = ref<File | null>(null)
 const transfers = ref<any[]>([])
@@ -348,35 +363,26 @@ const connectToSignalingServer = () => {
       addLog('error', `信令服务器重连错误: ${error.message}`)
     })
 
-    // 房间相关事件
-    socket.on('room-info', (data) => {
-      currentRoomId.value = data.roomId
-      // 过滤掉当前用户，不在列表中显示自己
-      roomUsers.value = data.users
-        .filter((uid: string) => uid !== userId.value) // 过滤掉当前用户
-        .map((userId: string) => ({
-          id: userId,
-          name: `用户 ${userId.substring(0, 6)}`,
-          isConnected: false
-        }))
-      addLog('success', `已加入房间: ${data.roomId}, 用户数: ${data.userCount}`)
+    // 新增：文件搜索相关事件
+    socket.on('search-results', (results) => {
+      searchResults.value = results
+      addLog('success', `搜索完成，找到 ${results.length} 个匹配文件`)
     })
 
-    socket.on('user-joined', (data) => {
-      // 只有当加入的用户不是当前用户时才添加到列表
-      if (data.userId !== userId.value) {
-        roomUsers.value.push({
-          id: data.userId,
-          name: `用户 ${data.userId.substring(0, 6)}`,
-          isConnected: false
-        })
-        addLog('info', `用户 ${data.userId.substring(0, 6)} 加入了房间`)
-      }
+    socket.on('download-node-found', (data) => {
+      const { fileHash, fileName, fileSize, nodeId } = data
+      addLog('info', `找到文件 ${fileName} 的下载节点: ${nodeId.substring(0, 6)}`)
+      
+      // 连接到拥有文件的节点
+      connectToUser(nodeId).then(() => {
+        // 开始文件传输
+        startFileDownload(fileHash, fileName, fileSize, nodeId)
+      })
     })
 
-    socket.on('user-left', (data) => {
-      roomUsers.value = roomUsers.value.filter(u => u.id !== data.userId)
-      addLog('info', `用户 ${data.userId.substring(0, 6)} 离开了房间`)
+    socket.on('download-node-not-found', (data) => {
+      const { fileHash, error } = data
+      addLog('error', `下载文件失败: ${error}`)
     })
 
     // WebRTC信令事件
@@ -446,54 +452,142 @@ const reconnectSignalingServer = async () => {
   connectToSignalingServer()
 }
 
-// 创建房间
-const createRoom = () => {
-  if (!socket) return
-  
-  const newRoomId = generateRoomId()
-  roomIdInput.value = newRoomId
-  joinRoom()
+// 选择共享目录
+const selectShareDirectory = async () => {
+  try {
+    const result = await window.electronAPI.invoke('p2p:select-share-dir')
+    if (!result.canceled && result.filePath) {
+      shareDirPath.value = result.filePath
+      addLog('info', `已选择共享目录: ${result.filePath}`)
+    }
+  } catch (error) {
+    addLog('error', `选择共享目录失败: ${error}`)
+  }
 }
 
-// 加入房间
-const joinRoom = () => {
-  if (!socket || !roomIdInput.value.trim()) return
+// 注册共享文件
+const registerSharedFiles = async () => {
+  if (!shareDirPath.value) {
+    addLog('error', '请先选择共享目录')
+    return
+  }
+
+  try {
+    // 扫描共享目录中的文件并计算哈希
+    const files = await window.electronAPI.invoke('p2p:scan-and-hash-files', shareDirPath.value)
+    
+    // 更新本地共享文件列表
+    sharedFiles.value = files
+    
+    // 同步共享文件列表到主进程的P2P处理器
+    try {
+      await window.electronAPI.invoke(IPC_CHANNELS.P2P_SET_SHARED_FILES, files);
+    } catch (syncError) {
+      addLog('error', `同步共享文件列表到主进程失败: ${syncError}`)
+    }
+    
+    // 向信令服务器注册文件
+    if (socket) {
+      socket.emit('register-files', files.map(file => ({
+        hash: file.hash,
+        fileName: file.fileName,
+        fileSize: file.fileSize
+      })))
+      
+      addLog('success', `已注册 ${files.length} 个共享文件到全局索引`)
+    }
+  } catch (error) {
+    addLog('error', `注册共享文件失败: ${error}`)
+  }
+}
+
+// 搜索文件
+const searchFiles = () => {
+  if (!searchQuery.value.trim()) {
+    addLog('error', '请输入搜索关键词')
+    return
+  }
   
-  socket.emit('join-room', roomIdInput.value.trim())
+  if (!socket) {
+    addLog('error', '未连接到信令服务器')
+    return
+  }
+  
+  socket.emit('search-files', searchQuery.value.trim())
+  addLog('info', `正在搜索: ${searchQuery.value}`)
+}
+
+// 下载文件
+const downloadFile = (result: any) => {
+  if (!socket) {
+    addLog('error', '未连接到信令服务器')
+    return
+  }
+  
+  // 请求下载文件的节点信息
+  socket.emit('request-download', result.hash)
+  addLog('info', `请求下载文件: ${result.fileName}`)
 }
 
 // 连接到用户
 const connectToUser = async (targetUserId: string) => {
-  if (!socket) return;
-
-  // 检查是否已存在连接
-  let peerConnection = peerConnections.get(targetUserId);
-  
-  // 如果不存在连接，创建新的
-  if (!peerConnection) {
-    peerConnection = createPeerConnection(targetUserId);
-  } else {
-    addLog('info', `已存在与 ${targetUserId} 的P2P连接，使用现有连接`);
-  }
-
-  try {
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    socket.emit('webrtc-signal', {
-      roomId: currentRoomId.value,
-      targetUserId: targetUserId,
-      signal: { type: 'offer', sdp: offer.sdp }
-    });
-  } catch (error) {
-    addLog('error', `创建WebRTC Offer失败: ${error}`);
-    // 可选：清理已创建的连接
-    if (!peerConnections.has(targetUserId)) {
-      peerConnections.delete(targetUserId);
-      multiDataChannels.delete(targetUserId);
+  return new Promise<void>((resolve, reject) => {
+    if (!socket) {
+      addLog('error', '未连接到信令服务器');
+      reject(new Error('未连接到信令服务器'));
+      return;
     }
-  }
 
-  addLog('info', `正在连接用户 ${targetUserId}...`);
+    // 检查是否已存在连接
+    let peerConnection = peerConnections.get(targetUserId);
+    
+    // 如果不存在连接，创建新的
+    if (!peerConnection) {
+      peerConnection = createPeerConnection(targetUserId);
+    } else {
+      addLog('info', `已存在与 ${targetUserId} 的P2P连接，使用现有连接`);
+      resolve();
+      return;
+    }
+
+    // 监听连接状态变化以返回Promise
+    const connectionHandler = () => {
+      if (peerConnection.connectionState === 'connected') {
+        resolve();
+        peerConnection.removeEventListener('connectionstatechange', connectionHandler);
+      } else if (['failed', 'closed', 'disconnected'].includes(peerConnection.connectionState)) {
+        reject(new Error(`连接失败: ${peerConnection.connectionState}`));
+        peerConnection.removeEventListener('connectionstatechange', connectionHandler);
+      }
+    };
+
+    peerConnection.addEventListener('connectionstatechange', connectionHandler);
+
+    try {
+      peerConnection.createOffer()
+        .then(offer => peerConnection.setLocalDescription(offer))
+        .then(() => {
+          socket.emit('webrtc-signal', {
+            targetUserId: targetUserId,
+            signal: { type: 'offer', sdp: peerConnection.localDescription?.sdp }
+          });
+        })
+        .catch(error => {
+          addLog('error', `创建WebRTC Offer失败: ${error}`);
+          // 可选：清理已创建的连接
+          if (!peerConnections.has(targetUserId)) {
+            peerConnections.delete(targetUserId);
+            multiDataChannels.delete(targetUserId);
+          }
+          reject(error);
+        });
+    } catch (error) {
+      addLog('error', `连接用户时发生错误: ${error}`);
+      reject(error);
+    }
+
+    addLog('info', `正在连接用户 ${targetUserId}...`);
+  });
 };
 
 // 创建WebRTC对等连接
@@ -540,7 +634,6 @@ const createPeerConnection = (peerId: string) => {
   peerConnection.onicecandidate = (event) => {
     if (event.candidate && socket) {
       socket.emit('webrtc-signal', {
-        roomId: currentRoomId.value,
         targetUserId: peerId,
         signal: {
           type: 'candidate',
@@ -982,14 +1075,10 @@ const attemptReconnect = async (peerId: string) => {
   
   addLog('info', `正在尝试重新连接到 ${cleanPeerId}`);
   
-  // 检查是否仍在房间中
-  if (currentRoomId.value) {
-    // 重新发起连接请求
-    socket.value?.emit('request-webrtc-offer', {
-      roomId: currentRoomId.value,
-      targetUserId: cleanPeerId
-    });
-  }
+  // 发起连接请求
+  socket.value?.emit('request-webrtc-offer', {
+    targetUserId: cleanPeerId
+  });
 }
 
 // 存储缓冲区调整任务的定时器
@@ -1049,7 +1138,6 @@ const handleWebRTCOffer = async (data: any) => {
 
   if (socket) {
     socket.emit('webrtc-signal', {
-      roomId: currentRoomId.value,
       targetUserId: fromUserId,
       signal: {
         type: 'answer',
@@ -1102,11 +1190,7 @@ const updateConnectionStatus = (peerId: string, state: string) => {
     })
   }
   
-  // 同时更新房间用户列表中的连接状态
-  const userIndex = roomUsers.value.findIndex(u => u.id === peerId)
-  if (userIndex !== -1) {
-    roomUsers.value[userIndex].isConnected = state === 'connected'
-  }
+
 }
 
 // 处理数据通道消息
@@ -1128,6 +1212,9 @@ const handleDataChannelMessage = (message: any, peerId: string) => {
     const data = JSON.parse(message)
     
     switch (data.type) {
+      case 'download-request':
+        handleDownloadRequest(data, peerId)
+        break
       case 'file-transfer-start':
         handleFileTransferStart(data, peerId)
         break
@@ -1222,23 +1309,116 @@ const handleFileTransferConfirmed = (data: any, peerId: string) => {
   }
 }
 
+// 发送指定路径的文件
+const startFileSend = async (transferId: string, peerId: string, filePath: string, fileName: string, fileSize: number, fileHash: string) => {
+  addLog('info', `开始发送文件: ${fileName} 到 ${peerId.substring(0, 6)}`)
+  
+  // 检查数据通道是否就绪
+  const dataChannel = dataChannels.get(peerId)
+  if (!dataChannel || dataChannel.readyState !== 'open') {
+    addLog('error', '数据通道未就绪，无法传输文件')
+    return
+  }
+  
+  try {
+    // 从主进程加载文件内容
+    const fileData: ArrayBuffer = await window.electronAPI.invoke('file:read-arraybuffer', { filePath });
+    
+    // 创建一个Blob对象来模拟File对象
+    const fileBlob = new Blob([fileData]);
+    const file = new File([fileBlob], fileName, { type: 'application/octet-stream' });
+    
+    // 更新传输状态
+    const transfer = transfers.value.find(t => t.id === transferId);
+    if (transfer) {
+      transfer.status = 'sending';
+    }
+    
+    // 发送文件传输开始信号
+    dataChannel.send(JSON.stringify({
+      type: 'file-transfer-start',
+      transferId: transferId,
+      fileInfo: {
+        name: fileName,
+        size: fileSize,
+        hash: fileHash
+      }
+    }))
+    
+    addLog('info', `已发送文件传输开始信号: ${fileName}`)
+    
+    // 使用多通道并行传输文件块
+    await sendFileChunksParallel(peerId, file, transferId);
+    
+  } catch (error) {
+    addLog('error', `发送文件失败: ${error}`)
+    
+    // 更新传输状态
+    const transfer = transfers.value.find(t => t.id === transferId)
+    if (transfer) {
+      transfer.status = 'failed'
+    }
+  }
+}
+
+// 处理下载请求（当收到下载请求时，根据哈希查找文件并发送）
+const handleDownloadRequest = async (data: any, peerId: string) => {
+  const { transferId, fileHash, fileName, fileSize } = data
+  addLog('info', `收到下载请求: ${fileName} (哈希: ${fileHash.substring(0, 8)}...)`)
+  
+  try {
+    // 通过IPC调用查找文件
+    const fileInfo = await window.electronAPI.invoke(IPC_CHANNELS.P2P_FIND_FILE_BY_HASH, fileHash);
+    
+    if (fileInfo) {
+      addLog('info', `找到文件: ${fileInfo.filePath}`)
+      
+      // 创建发送传输记录
+      const sendingTransfer = {
+        id: transferId,
+        peerId: peerId,
+        fileName: fileInfo.fileName,
+        fileSize: fileInfo.fileSize,
+        progress: 0,
+        status: 'preparing',
+        direction: 'send',
+        hash: fileHash
+      }
+      transfers.value.push(sendingTransfer)
+      
+      // 开始发送文件
+      await startFileSend(transferId, peerId, fileInfo.filePath, fileInfo.fileName, fileInfo.fileSize, fileHash)
+    } else {
+      addLog('error', `未找到哈希为 ${fileHash} 的文件`)
+      
+      // 发送错误消息
+      const dataChannel = dataChannels.get(peerId)
+      if (dataChannel && dataChannel.readyState === 'open') {
+        dataChannel.send(JSON.stringify({
+          type: 'download-error',
+          transferId: transferId,
+          error: 'File not found'
+        }))
+      }
+    }
+  } catch (error) {
+    addLog('error', `处理下载请求时出错: ${error}`)
+  }
+}
+
 // 处理文件传输开始
 const handleFileTransferStart = (data: any, peerId: string) => {
   const { transferId, fileInfo } = data
   addLog('info', `收到文件传输开始信号: ${fileInfo.name}`)
   
+  // 在新的分布式搜索下载模式下，所有传输都是主动发起的，直接接受
   // 初始化接收文件块存储
   initReceivedFileBlocks(transferId, fileInfo, data.totalChunks);
   
-  // 保存传输ID以便在用户接受时使用
-  fileTransferRequest.value = { 
-    fromUserId: peerId, 
-    fileInfo: fileInfo,
-    transferId: transferId  // 保存原始transferId
-  }
-  showFileTransferConfirm.value = true
+  // 直接接受文件传输
+  acceptFileTransfer();
   
-  addLog('info', `收到来自 ${peerId.substring(0, 6)} 的文件传输请求: ${fileInfo.name}`)
+  addLog('info', `自动接受来自 ${peerId.substring(0, 6)} 的下载文件: ${fileInfo.name}`)
 }
 
 
@@ -1726,6 +1906,66 @@ const handleFileTransferComplete = (data: any, peerId: string) => {
   }
 }
 
+// 文件下载功能
+const startFileDownload = async (fileHash: string, fileName: string, fileSize: number, targetUserId: string) => {
+  // 创建下载传输记录
+  const transferId = generateTransferId()
+  const transfer = {
+    id: transferId,
+    peerId: targetUserId,
+    fileName: fileName,
+    fileSize: fileSize,
+    progress: 0,
+    status: 'connecting',
+    direction: 'receive',
+    hash: fileHash  // 添加文件哈希信息
+  }
+  transfers.value.push(transfer)
+  
+  // 发送下载请求
+  const waitForDataChannel = (targetId: string, timeout: number = 10000): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      
+      const checkChannel = () => {
+        const dataChannel = dataChannels.get(targetId);
+        if (dataChannel && dataChannel.readyState === 'open') {
+          resolve(true);
+        } else if (Date.now() - startTime >= timeout) {
+          resolve(false);
+        } else {
+          setTimeout(checkChannel, 100); // 每100ms检查一次
+        }
+      };
+      
+      checkChannel();
+    });
+  };
+  
+  // 等待数据通道就绪
+  const isReady = await waitForDataChannel(targetUserId);
+  
+  if (isReady) {
+    const dataChannel = dataChannels.get(targetUserId);
+    if (dataChannel && dataChannel.readyState === 'open') {
+      // 发送下载请求，让对方发送指定哈希的文件
+      dataChannel.send(JSON.stringify({
+        type: 'download-request',
+        transferId: transferId,
+        fileHash: fileHash,
+        fileName: fileName,
+        fileSize: fileSize
+      }));
+      
+      addLog('info', `已发送下载请求: ${fileName}`);
+    } else {
+      addLog('error', '数据通道状态异常，无法发送下载请求');
+    }
+  } else {
+    addLog('error', '等待数据通道就绪超时，无法发送下载请求');
+  }
+}
+
 // 文件传输相关方法
 const handleFileSelect = (event: Event) => {
   const input = event.target as HTMLInputElement
@@ -1742,61 +1982,48 @@ const selectFile = () => {
   }
 }
 
-const sendFile = async () => {
-  console.log('sendFile函数被调用')
-  console.log('selectedPeerId:', selectedPeerId.value)
-  console.log('selectedFile:', selectedFile.value)
-  console.log('socket状态:', socket ? '已连接' : '未连接')
-  
-  if (!selectedPeerId.value || !selectedFile.value) {
-    console.log('文件传输条件不满足: 未选择接收用户或文件')
-    addLog('error', '请先选择接收用户和要传输的文件')
+// 上传分享文件（添加到共享列表并注册到全局索引）
+const uploadFile = async () => {
+  if (!selectedFile.value) {
+    addLog('error', '请选择要上传分享的文件')
     return
   }
   
   if (!socket) {
-    console.log('Socket未连接，无法发送文件传输请求')
-    addLog('error', '未连接到信令服务器，无法发送文件')
+    addLog('error', '未连接到信令服务器，无法分享文件')
     return
   }
 
-  // 发送文件传输请求
-  const fileInfo = {
-    name: selectedFile.value.name,
-    size: selectedFile.value.size,
-    type: selectedFile.value.type,
-    lastModified: selectedFile.value.lastModified
-  }
-
-  console.log('准备发送文件传输请求:', {
-    targetUserId: selectedPeerId.value,
-    fileInfo: fileInfo
-  })
-
-  // 首先通过socket.io发送文件传输请求以通知接收方
-  socket.emit('file-transfer-request', {
-    targetUserId: selectedPeerId.value,
-    fileInfo: fileInfo
-  })
-
-  console.log('文件传输请求已发送')
-  addLog('info', `已向 ${selectedPeerId.value.substring(0, 6)} 发送文件传输请求: ${selectedFile.value.name}`)
-  
-  // 检查数据通道是否就绪，如果就绪则准备P2P传输
-  const dataChannel = dataChannels.get(selectedPeerId.value)
-  if (dataChannel && dataChannel.readyState === 'open') {
-    // 数据通道已就绪，可以准备P2P传输
-    startFileTransfer(selectedPeerId.value, fileInfo, selectedFile.value)
-  } else {
-    // 数据通道未就绪，延迟准备传输直到连接建立
-    addLog('warning', '数据通道未就绪，将在连接建立后开始传输')
-    // 将传输任务暂存，等待连接建立后执行
-    // 为此，我们需要一个队列来保存待传输的文件
-    pendingTransfers.push({
-      peerId: selectedPeerId.value,
-      fileInfo: fileInfo,
-      file: selectedFile.value
-    })
+  try {
+    // 创建一个临时的文件对象用于哈希计算
+    const file = selectedFile.value;
+    
+    // 为了计算哈希，我们将文件内容读取并计算（这可能对于大文件不太高效，但在前端环境这是必要的）
+    const arrayBuffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    
+    // 添加到共享文件列表
+    const newSharedFile = {
+      fileName: file.name,
+      fileSize: file.size,
+      hash: hash,
+      filePath: '' // 临时文件，没有实际路径
+    };
+    
+    sharedFiles.value.push(newSharedFile);
+    
+    // 向信令服务器注册这个新文件
+    socket.emit('register-files', [{
+      hash: hash,
+      fileName: file.name,
+      fileSize: file.size
+    }]);
+    
+    addLog('success', `已分享文件: ${file.name}，哈希: ${hash.substring(0, 8)}...`)
+  } catch (error) {
+    addLog('error', `分享文件失败: ${error}`)
   }
   
   // 清空选择
@@ -2374,80 +2601,312 @@ const addLog = (type: string, message: string) => {
   width: 100%;
   height: 100%;
   margin: 0;
-  padding: 0;
+  padding: 20px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   background: transparent;
-  overflow: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
+  gap: 20px;
 }
 
-/* 组件布局 */
-.component-grid {
+/* 状态指示器 */
+.status-indicator {
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-right: 10px;
+  font-size: 0.9em;
+}
+
+.status-indicator.online {
+  background-color: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+/* 输入组 */
+.input-group {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+}
+
+.input-field {
   flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: auto auto 1fr;
-  gap: 0;
-  height: 100%;
-  padding: 0;
+  min-width: 200px;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
 }
 
-.grid-item {
-  background: white;
-  border: 1px solid #e2e8f0;
+.btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: #007bff;
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #0056b3;
+}
+
+.btn-secondary {
+  background-color: #6c757d;
+  color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: #545b62;
+}
+
+.btn-download {
+  background-color: #28a745;
+  color: white;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.btn-download:hover:not(:disabled) {
+  background-color: #1e7e34;
+}
+
+.btn-reconnect {
+  background-color: #ffc107;
+  color: #212529;
+}
+
+.btn-reconnect:hover:not(:disabled) {
+  background-color: #e0a800;
+}
+
+.btn-small {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* 文件列表 */
+.file-list {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 10px;
+  background-color: #f8f9fa;
 }
 
-/* 信令服务器状态 - 顶部左侧 */
-.signaling-status {
-  grid-column: 1;
-  grid-row: 1;
-  padding: 1rem;
-  border-right: 1px solid #e2e8f0;
-  border-bottom: 1px solid #e2e8f0;
+.file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background-color: white;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
 }
 
-/* 房间管理 - 顶部右侧 */
-.room-management {
-  grid-column: 2;
-  grid-row: 1;
-  padding: 1rem;
-  border-bottom: 1px solid #e2e8f0;
+.file-name {
+  font-weight: 500;
+  color: #2d3748;
+  flex: 1;
 }
 
-/* 房间用户列表 - 中间左侧 */
-.room-users {
-  grid-column: 1;
-  grid-row: 2;
-  padding: 1rem;
-  border-right: 1px solid #e2e8f0;
-  border-bottom: 1px solid #e2e8f0;
+.file-size {
+  color: #718096;
+  font-size: 0.9em;
+  margin-left: 10px;
 }
 
-/* P2P连接 - 中间右侧 */
-.p2p-connections {
-  grid-column: 2;
-  grid-row: 2;
-  padding: 1rem;
-  border-bottom: 1px solid #e2e8f0;
+/* 搜索结果 */
+.result-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 10px;
+  background-color: #f8f9fa;
 }
 
-/* 文件传输 - 底部左侧 */
-.file-transfer {
-  grid-column: 1;
-  grid-row: 3;
-  padding: 1rem;
-  border-right: 1px solid #e2e8f0;
+.result-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px;
+  background-color: white;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
 }
 
-/* 操作日志 - 底部右侧 */
-.logs {
-  grid-column: 2;
-  grid-row: 3;
-  padding: 1rem;
+.result-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.result-item .file-name {
+  font-weight: 600;
+  color: #2c5aa0;
+}
+
+.result-item .file-size {
+  font-size: 0.9em;
+  color: #4a5568;
+}
+
+.node-count {
+  font-size: 0.85em;
+  color: #718096;
+  background-color: #edf2f7;
+  padding: 2px 6px;
+  border-radius: 12px;
+}
+
+/* P2P连接列表 */
+.connection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 150px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 10px;
+  background-color: #f8f9fa;
+}
+
+.connection-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: white;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
+}
+
+.connection-status.connected {
+  color: #28a745;
+  font-weight: 500;
+}
+
+.connection-status {
+  color: #6c757d;
+  font-size: 0.9em;
+}
+
+/* 日志容器 */
+.log-container {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 10px;
+  background-color: #f8f9fa;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.log-item {
+  padding: 4px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.log-item:last-child {
+  border-bottom: none;
+}
+
+.log-time {
+  color: #718096;
+  margin-right: 10px;
+  font-size: 0.8em;
+}
+
+.log-message {
+  word-break: break-word;
+}
+
+.log-item.info .log-message {
+  color: #495057;
+}
+
+.log-item.success .log-message {
+  color: #28a745;
+}
+
+.log-item.warning .log-message {
+  color: #ffc107;
+}
+
+.log-item.error .log-message {
+  color: #dc3545;
+}
+
+/* 模态框 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background-color: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  max-width: 500px;
+  width: 90%;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.file-info {
+  background-color: #f8f9fa;
+  padding: 15px;
+  border-radius: 4px;
+  margin: 15px 0;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.status-item span:first-child {
+  width: 100px;
+  font-weight: 500;
 }
 
 /* 标题样式 */
@@ -2458,26 +2917,6 @@ h3 {
   font-size: 1rem;
   padding-bottom: 0.5rem;
   border-bottom: 2px solid #e2e8f0;
-}
-
-/* 输入组样式 */
-.input-group {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
-}
-
-.input-field {
-  flex: 1;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  font-size: 0.875rem;
-  transition: all 0.2s ease;
-  min-width: 150px;
-  background: #ffffff;
 }
 
 .input-field:focus {
@@ -2492,18 +2931,6 @@ h3 {
   opacity: 0.6;
 }
 
-/* 按钮样式 */
-.btn {
-  padding: 0.5rem 1rem;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 0.875rem;
-  font-weight: 500;
-  transition: all 0.2s ease;
-  min-width: 80px;
-}
-
 .btn:hover:not(:disabled) {
   transform: translateY(-1px);
 }
@@ -2514,186 +2941,43 @@ h3 {
   transform: none !important;
 }
 
-.btn-primary {
-  background: #3b82f6;
-  color: white;
+/* 连接状态 */
+.connection-status.connected {
+  color: #28a745;
+  font-weight: 500;
 }
 
-.btn-primary:hover:not(:disabled) {
-  background: #2563eb;
-}
-
-.btn-secondary {
-  background: #64748b;
-  color: white;
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: #475569;
-}
-
-.btn-small {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-  min-width: 60px;
-}
-
-.btn-reconnect {
-  background: #f59e0b;
-  color: white;
-  border: none;
-  padding: 0.25rem 0.5rem;
-  margin-left: 0.5rem;
-  font-size: 0.75rem;
-  border-radius: 4px;
-  cursor: pointer;
-  min-width: 60px;
-}
-
-.btn-reconnect:hover {
-  background: #d97706;
-}
-
-/* 状态项样式 */
-.status-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-  font-size: 0.875rem;
-}
-
-.status-indicator {
-  font-weight: 600;
-  padding: 0.25rem 0.5rem;
-  border-radius: 12px;
-  font-size: 0.75rem;
-}
-
-.status-indicator.online {
-  background: #10b981;
-  color: white;
-}
-
-/* 列表样式 */
-.user-list, .connection-list {
-  flex: 1;
-  overflow-y: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  padding: 0.5rem;
-  background: #ffffff;
-}
-
-.user-item, .connection-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.5rem;
-  border-bottom: 1px solid #f1f5f9;
-  transition: background-color 0.2s ease;
-  border-radius: 4px;
-  margin-bottom: 0.25rem;
-  font-size: 0.875rem;
-}
-
-.user-item:last-child, .connection-item:last-child {
-  border-bottom: none;
-  margin-bottom: 0;
-}
-
-.user-item:hover, .connection-item:hover {
-  background-color: #f8fafc;
-}
-
-.user-item.connected, .connection-item.connected {
-  background: #d1fae5;
-  border-left: 3px solid #10b981;
-}
-
-.user-item.current-user {
-  background: #dbeafe;
-  border-left: 3px solid #3b82f6;
-}
-
-.current-user-label {
-  color: #3b82f6;
-  font-weight: 600;
-  font-size: 0.75rem;
-  margin-left: 0.5rem;
-  background: rgba(59, 130, 246, 0.1);
-  padding: 0.125rem 0.375rem;
-  border-radius: 8px;
-}
-
-/* 日志样式 */
-.log-container {
-  flex: 1;
-  overflow-y: auto;
-  border: 1px solid #1e293b;
-  border-radius: 6px;
-  padding: 0.5rem;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 0.75rem;
-  background: #0f172a;
-  color: #e2e8f0;
-}
-
-.log-item {
-  margin-bottom: 0.25rem;
-  padding: 0.25rem 0;
-  border-left: 2px solid transparent;
-  padding-left: 0.5rem;
-  font-size: 0.75rem;
-}
-
-.log-item.success {
-  border-left-color: #10b981;
-  color: #a7f3d0;
-}
-
-.log-item.error {
-  border-left-color: #ef4444;
-  color: #fca5a5;
-}
-
-.log-item.info {
-  border-left-color: #3b82f6;
-  color: #93c5fd;
-}
-
-.log-item.warning {
-  border-left-color: #f59e0b;
-  color: #fde68a;
-}
-
-.log-time {
-  color: #94a3b8;
-  margin-right: 0.5rem;
+.connection-status {
+  color: #6c757d;
+  font-size: 0.9em;
 }
 
 /* 滚动条样式 */
-.user-list::-webkit-scrollbar,
+.file-list::-webkit-scrollbar,
+.result-list::-webkit-scrollbar,
 .connection-list::-webkit-scrollbar,
 .log-container::-webkit-scrollbar {
-  width: 4px;
+  width: 6px;
 }
 
-.user-list::-webkit-scrollbar-track,
+.file-list::-webkit-scrollbar-track,
+.result-list::-webkit-scrollbar-track,
 .connection-list::-webkit-scrollbar-track,
 .log-container::-webkit-scrollbar-track {
   background: #f1f5f9;
-  border-radius: 2px;
+  border-radius: 3px;
 }
 
-.user-list::-webkit-scrollbar-thumb,
+.file-list::-webkit-scrollbar-thumb,
+.result-list::-webkit-scrollbar-thumb,
 .connection-list::-webkit-scrollbar-thumb,
 .log-container::-webkit-scrollbar-thumb {
   background: #cbd5e1;
-  border-radius: 2px;
+  border-radius: 3px;
 }
 
-.user-list::-webkit-scrollbar-thumb:hover,
+.file-list::-webkit-scrollbar-thumb:hover,
+.result-list::-webkit-scrollbar-thumb:hover,
 .connection-list::-webkit-scrollbar-thumb:hover,
 .log-container::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
@@ -2702,6 +2986,8 @@ h3 {
 .file-input {
   display: none;
 }
+
+</style>
 
 .file-input-label {
   display: inline-flex;
@@ -2723,262 +3009,20 @@ h3 {
   box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
 }
 
-.transfer-list {
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-  padding: 24px;
-  border-radius: 16px;
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
-  margin-bottom: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-.transfer-item {
-  padding: 20px;
-  border-bottom: 1px solid #f1f5f9;
-  border-radius: 12px;
-  margin-bottom: 12px;
-  background: linear-gradient(135deg, #ffffff 0%, #fafafa 100%);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-}
-
-.transfer-item:hover {
-  transform: translateX(6px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
-}
-
-.transfer-item:last-child {
-  border-bottom: none;
-  margin-bottom: 0;
-}
-
-.transfer-info {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.file-name {
-  font-weight: 700;
-  color: #1e293b;
-  flex: 1;
-  min-width: 180px;
-  font-size: 16px;
-}
-
-.file-size {
-  color: #64748b;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.peer-id {
-  color: #64748b;
-  font-size: 14px;
-  background: #f1f5f9;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
-.transfer-progress {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
-}
-
-.progress-bar {
-  flex: 1;
-  height: 16px;
-  background-color: #f1f5f9;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
-  min-width: 200px;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #6366f1 0%, #8b5cf6 100%);
-  transition: width 0.3s ease;
-  border-radius: 8px;
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-
-.progress-text {
-  font-size: 14px;
-  font-weight: 700;
-  color: #475569;
-  min-width: 60px;
-}
-
-.transfer-status {
-  font-size: 13px;
-  padding: 6px 12px;
-  border-radius: 15px;
-  background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
-  color: #475569;
-  font-weight: 600;
-}
-
-.logs {
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-  padding: 24px;
-  border-radius: 16px;
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-.log-container {
-  max-height: 280px;
-  overflow-y: auto;
-  border: 2px solid #1e293b;
-  border-radius: 12px;
-  padding: 16px;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 14px;
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-  color: #e2e8f0;
-  box-shadow: inset 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.log-item {
-  margin-bottom: 8px;
-  padding: 8px 0;
-  border-left: 4px solid transparent;
-  padding-left: 12px;
-  transition: all 0.2s ease;
-}
-
-.log-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 4px;
-}
-
-.log-item.success {
-  border-left-color: #10b981;
-  color: #a7f3d0;
-}
-
-.log-item.error {
-  border-left-color: #ef4444;
-  color: #fca5a5;
-}
-
-.log-item.info {
-  border-left-color: #3b82f6;
-  color: #93c5fd;
-}
-
-.log-item.warning {
-  border-left-color: #f59e0b;
-  color: #fde68a;
-}
-
-.log-time {
-  color: #94a3b8;
-  margin-right: 12px;
-  font-weight: 600;
-}
-
-.log-message {
-  color: #e2e8f0;
-}
-
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.9) 0%, rgba(139, 92, 246, 0.9) 100%);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 10000;
-  backdrop-filter: blur(8px);
-  animation: fadeIn 0.3s ease-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-.modal-content {
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-  padding: 36px;
-  border-radius: 20px;
-  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
-  max-width: 520px;
-  width: 90%;
-  max-height: 80vh;
-  overflow-y: auto;
-  animation: modalSlideIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-@keyframes modalSlideIn {
-  from {
-    opacity: 0;
-    transform: scale(0.8) translateY(30px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
-}
-
-.modal-content h3 {
-  margin-top: 0;
-  color: #1e293b;
-  text-align: center;
-  font-size: 26px;
-  margin-bottom: 28px;
-  border-bottom: none;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
 /* 响应式设计 */
 @media (max-width: 768px) {
   .cross-network-p2p {
-    padding: 20px;
-    margin: 16px;
-    border-radius: 12px;
-  }
-  
-  h2 {
-    font-size: 24px;
-    margin-bottom: 24px;
-  }
-  
-  h3 {
-    font-size: 18px;
-    margin-bottom: 16px;
+    padding: 16px;
+    margin: 8px;
   }
   
   .input-group {
     flex-direction: column;
-    gap: 12px;
+    align-items: stretch;
   }
   
   .input-field {
-    min-width: 100%;
-  }
-  
-  .btn {
-    min-width: 100%;
-    margin-bottom: 8px;
+    min-width: auto;
   }
   
   .status-item {
@@ -2987,74 +3031,59 @@ h3 {
     gap: 8px;
   }
   
-  .user-item, .connection-item {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
+  .result-info {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+  
+  .result-item .file-name {
+    flex: 1;
   }
   
   .transfer-info {
     flex-direction: column;
-    gap: 8px;
+    gap: 4px;
   }
   
   .transfer-progress {
     flex-direction: column;
-    gap: 12px;
+    align-items: stretch;
+    gap: 8px;
   }
   
-  .progress-bar {
-    min-width: 100%;
+  .modal-content {
+    margin: 16px;
+    padding: 24px;
   }
-}
-
-/* 加载动画 */
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
+  
+  .modal-actions {
+    flex-direction: column;
   }
-  50% {
-    opacity: 0.5;
+  
+  .modal-actions .btn {
+    width: 100%;
   }
-}
-
-.loading {
-  animation: pulse 2s infinite;
 }
 
 /* 滚动条样式 */
-.user-list::-webkit-scrollbar,
-.connection-list::-webkit-scrollbar,
-.log-container::-webkit-scrollbar {
+::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
 
-.user-list::-webkit-scrollbar-track,
-.connection-list::-webkit-scrollbar-track,
-.log-container::-webkit-scrollbar-track {
-  background: #f1f5f9;
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
   border-radius: 4px;
 }
 
-.user-list::-webkit-scrollbar-thumb,
-.connection-list::-webkit-scrollbar-thumb,
-.log-container::-webkit-scrollbar-thumb {
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border-radius: 4px;
 }
 
-.user-list::-webkit-scrollbar-thumb:hover,
-.connection-list::-webkit-scrollbar-thumb:hover,
-.log-container::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-}
-
-.file-info {
-  margin-bottom: 24px;
-  padding: 16px;
-  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-  border-radius: 8px;
-  border-left: 4px solid #667eea;
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
 }
 
 .file-info p {
@@ -3080,6 +3109,27 @@ h3 {
   min-width: 100px;
   font-size: 15px;
 }
+
+/* 为文件选择按钮提供替代样式 */
+.file-input-button {
+  padding: 10px 20px;
+  border: 2px solid #e1e5e9;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  min-width: 100px;
+  text-align: center;
+  font-size: 14px;
+  color: #6c757d;
+}
+
+.file-input-button:hover {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  color: #495057;
+}
+
 
 .file-input {
   display: none;
@@ -3165,4 +3215,3 @@ h3 {
 ::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
 }
-</style>

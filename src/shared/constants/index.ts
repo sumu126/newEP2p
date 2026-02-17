@@ -80,14 +80,23 @@ export const IPC_CHANNELS = {
   // P2P通信通道
   P2P_INITIALIZE: 'p2p:initialize',
   P2P_GET_USER_ID: 'p2p:get-user-id',
-  P2P_CREATE_ROOM: 'p2p:create-room',
-  P2P_JOIN_ROOM: 'p2p:join-room',
+  P2P_CREATE_ROOM: 'p2p:create-room',  // 保留但标记为废弃
+  P2P_JOIN_ROOM: 'p2p:join-room',      // 保留但标记为废弃
   P2P_CONNECT_TO_USER: 'p2p:connect-to-user',
   P2P_DISCONNECT_PEER: 'p2p:disconnect-peer',
   P2P_GET_PEERS: 'p2p:get-peers',
   P2P_SEND_FILE: 'p2p:send-file',
   P2P_CANCEL_TRANSFER: 'p2p:cancel-transfer',
   P2P_GET_TRANSFERS: 'p2p:get-transfers',
+  
+  // 新增：分布式文件搜索相关通道
+  P2P_SCAN_AND_HASH_FILES: 'p2p:scan-and-hash-files',
+  P2P_REGISTER_FILES: 'p2p:register-files',
+  P2P_SEARCH_FILES: 'p2p:search-files',
+  P2P_SELECT_SHARE_DIR: 'p2p:select-share-dir',
+  P2P_REQUEST_DOWNLOAD: 'p2p:request-download',
+  P2P_SET_SHARED_FILES: 'p2p:set-shared-files',
+  P2P_FIND_FILE_BY_HASH: 'p2p:find-file-by-hash',
   
   // P2P事件通道
   P2P_PEER_CONNECTED: 'p2p:peer-connected',

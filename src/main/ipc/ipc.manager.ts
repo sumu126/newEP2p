@@ -4,6 +4,7 @@ import { ConfigHandler } from './config.handler';
 import { FileHandler } from './file.handler';
 import { WindowHandler } from './window.handler';
 import { FileSaveHandler } from './file-save.handler';
+import { P2PHandler } from './p2p.handler';
 import { IPC_CHANNELS } from '@shared/constants';
 import { ModuleManager } from '../managers/module.manager';
 import { ConfigModule } from '../modules/config.module';
@@ -22,6 +23,7 @@ export class IpcManager {
   private fileHandler: FileHandler;
   private fileSaveHandler: FileSaveHandler;
   private windowHandler: WindowHandler;
+  private p2pHandler: P2PHandler;
   private moduleManager: ModuleManager;
 
   constructor(ipcMain: IpcMain, moduleManager: ModuleManager) {
@@ -33,6 +35,7 @@ export class IpcManager {
     this.fileHandler = new FileHandler();
     this.fileSaveHandler = new FileSaveHandler();
     this.windowHandler = new WindowHandler();
+    this.p2pHandler = new P2PHandler();
   }
 
   public registerHandler(handler: IpcHandler): void {
@@ -69,7 +72,8 @@ export class IpcManager {
     // 注册窗口操作处理器
     this.registerWindowHandlers();
     
-    
+    // 注册P2P处理器
+    this.registerP2PHandlers();
   }
 
   private initializeConfigHandler(): void {
@@ -233,6 +237,51 @@ export class IpcManager {
       },
     });
   }
+
+  private registerP2PHandlers(): void {
+    this.registerHandler({
+      channel: IPC_CHANNELS.P2P_SCAN_AND_HASH_FILES,
+      handler: (event: IpcMainInvokeEvent, dirPath: string): Promise<any> => {
+        return this.p2pHandler.scanAndHashFiles(event, dirPath);
+      },
+    });
+
+    this.registerHandler({
+      channel: IPC_CHANNELS.P2P_REGISTER_FILES,
+      handler: (event: IpcMainInvokeEvent, files: any[]): Promise<any> => {
+        return this.p2pHandler.registerFilesWithSignalServer(event, files);
+      },
+    });
+
+    this.registerHandler({
+      channel: IPC_CHANNELS.P2P_SEARCH_FILES,
+      handler: (event: IpcMainInvokeEvent, query: string): Promise<any> => {
+        return this.p2pHandler.searchFiles(event, query);
+      },
+    });
+
+    this.registerHandler({
+            channel: IPC_CHANNELS.P2P_SELECT_SHARE_DIR,
+            handler: (event: IpcMainInvokeEvent): Promise<any> => {
+              return this.p2pHandler.selectShareDirectory(event);
+            },
+          });
+
+          this.registerHandler({
+            channel: IPC_CHANNELS.P2P_FIND_FILE_BY_HASH,
+            handler: (event: IpcMainInvokeEvent, hash: string): Promise<any> => {
+              return this.p2pHandler.findFileByHash(event, hash);
+            },
+          });
+
+          this.registerHandler({
+            channel: IPC_CHANNELS.P2P_SET_SHARED_FILES,
+            handler: (event: IpcMainInvokeEvent, files: any[]): Promise<any> => {
+              this.p2pHandler.setSharedFiles(files);
+              return Promise.resolve({ success: true });
+            },
+          });
+        }
 
   
 
