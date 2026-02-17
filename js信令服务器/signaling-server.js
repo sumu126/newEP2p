@@ -64,18 +64,21 @@ io.on('connection', (socket) => {
     console.log(`当前文件索引大小: ${fileIndex.size}`);
   });
 
-  // 搜索文件
+  // 搜索文件（支持文件名和哈希值搜索）
   socket.on('search-files', (query) => {
     console.log(`用户 ${socket.id} 搜索文件:`, query);
     
     const results = [];
     const lowerQuery = query.toLowerCase();
     
-    for (const [hash, fileInfo] of fileIndex.entries()) {
-      if (
-        fileInfo.fileName.toLowerCase().includes(lowerQuery) ||
-        hash.toLowerCase().includes(lowerQuery)
-      ) {
+    // 检查是否是哈希值（SHA-256通常是64位十六进制字符串）
+    const isHashSearch = /^[a-f0-9]{64}$/.test(lowerQuery);
+    
+    if (isHashSearch) {
+      // 精确哈希搜索
+      if (fileIndex.has(lowerQuery)) {
+        const fileInfo = fileIndex.get(lowerQuery);
+        
         // 只返回活跃节点
         const activeNodes = Array.from(fileInfo.nodes).filter(nodeId => 
           io.sockets.sockets.get(nodeId) && io.sockets.sockets.get(nodeId).connected
@@ -83,12 +86,34 @@ io.on('connection', (socket) => {
         
         if (activeNodes.length > 0) {
           results.push({
-            hash: hash,
+            hash: lowerQuery,
             fileName: fileInfo.fileName,
             fileSize: fileInfo.fileSize,
             nodeCount: activeNodes.length,
-            nodes: activeNodes
+            nodes: activeNodes,
+            isExactMatch: true
           });
+        }
+      }
+    } else {
+      // 文件名模糊搜索（不搜索哈希值）
+      for (const [hash, fileInfo] of fileIndex.entries()) {
+        if (fileInfo.fileName.toLowerCase().includes(lowerQuery)) {
+          // 只返回活跃节点
+          const activeNodes = Array.from(fileInfo.nodes).filter(nodeId => 
+            io.sockets.sockets.get(nodeId) && io.sockets.sockets.get(nodeId).connected
+          );
+          
+          if (activeNodes.length > 0) {
+            results.push({
+              hash: hash,
+              fileName: fileInfo.fileName,
+              fileSize: fileInfo.fileSize,
+              nodeCount: activeNodes.length,
+              nodes: activeNodes,
+              isExactMatch: false
+            });
+          }
         }
       }
     }
@@ -190,7 +215,7 @@ httpServer.listen(PORT, () => {
   console.log(`信令服务器运行在端口 ${PORT}`);
   console.log(`支持以下事件:`);
   console.log(`- register-files: 注册本地文件到全局索引`);
-  console.log(`- search-files: 搜索全局文件索引`);
+  console.log(`- search-files: 搜索全局文件索引（支持文件名和SHA-256哈希值）`);
   console.log(`- request-download: 请求下载文件的节点信息`);
   console.log(`- webrtc-signal: WebRTC信令转发`);
   console.log(`- file-transfer: 文件传输信令`);

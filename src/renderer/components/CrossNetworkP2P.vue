@@ -133,8 +133,19 @@
             :key="file.hash"
             class="file-item"
           >
-            <span class="file-name">{{ file.fileName }}</span>
-            <span class="file-size">{{ formatFileSize(file.fileSize) }}</span>
+            <div class="file-info">
+              <span class="file-name">{{ file.fileName }}</span>
+              <span class="file-size">{{ formatFileSize(file.fileSize) }}</span>
+            </div>
+            <div class="file-actions">
+              <button 
+                @click="copyFileHash(file.hash)"
+                class="btn-copy-hash"
+                title="复制文件哈希值"
+              >
+                📋 复制哈希
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -143,13 +154,17 @@
     <!-- 文件搜索 -->
     <div class="file-search">
       <h3>搜索全网文件</h3>
+      <div class="search-hint">
+        💡 支持文件名关键词或SHA-256哈希值（64位十六进制）搜索
+      </div>
       <div class="input-group">
         <input 
           v-model="searchQuery" 
-          placeholder="输入文件名关键词" 
+          placeholder="输入文件名关键词或SHA-256哈希值" 
           class="input-field"
           @keyup.enter="searchFiles"
           :disabled="!isSignalingConnected"
+          :maxlength="64"
         />
         <button 
           @click="searchFiles" 
@@ -168,11 +183,13 @@
             v-for="result in searchResults" 
             :key="result.hash"
             class="result-item"
+            :class="{ exact: result.isExactMatch }"
           >
             <div class="result-info">
               <span class="file-name">{{ result.fileName }}</span>
               <span class="file-size">{{ formatFileSize(result.fileSize) }}</span>
               <span class="node-count">可用节点: {{ result.nodeCount }}</span>
+              <span v-if="result.isExactMatch" class="exact-match-badge">精确匹配</span>
             </div>
             <button 
               @click="downloadFile(result)"
@@ -2729,6 +2746,16 @@ const getStatusText = (status: string): string => {
   return statusMap[status] || status
 }
 
+// 复制文件哈希到剪贴板
+const copyFileHash = async (hash: string) => {
+  try {
+    await navigator.clipboard.writeText(hash)
+    addLog('success', `文件哈希已复制: ${hash.substring(0, 16)}...`)
+  } catch (error) {
+    addLog('error', `复制哈希失败: ${error}`)
+  }
+}
+
 const addLog = (type: string, message: string) => {
   logs.value.unshift({
     id: Date.now(),
@@ -3229,6 +3256,7 @@ const addLog = (type: string, message: string) => {
   border: 1px solid #f3f4f6;
   transition: all 0.3s ease;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  gap: 12px;
 }
 
 .file-item:hover {
@@ -3237,12 +3265,50 @@ const addLog = (type: string, message: string) => {
   border-color: #e5e7eb;
 }
 
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.file-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.btn-copy-hash {
+  padding: 6px 12px;
+  font-size: 12px;
+  background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-copy-hash:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
 .file-name {
   font-weight: 500;
   color: #1f2937;
   flex: 1;
   font-size: 14px;
   line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .file-size {
@@ -3281,10 +3347,19 @@ const addLog = (type: string, message: string) => {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
+.result-item.exact {
+  border: 2px solid #10b981;
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+}
+
 .result-item:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   border-color: #e5e7eb;
+}
+
+.result-item.exact:hover {
+  border-color: #059669;
 }
 
 .result-info {
@@ -3292,6 +3367,33 @@ const addLog = (type: string, message: string) => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
+}
+
+.exact-match-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
+}
+
+/* 搜索提示 */
+.search-hint {
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-radius: 8px;
+  border-left: 4px solid #f59e0b;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #92400e;
+  line-height: 1.5;
+  box-shadow: 0 2px 8px rgba(251, 191, 36, 0.15);
 }
 
 .result-item .file-name {
