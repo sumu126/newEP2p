@@ -6,22 +6,41 @@ import { createReadStream } from 'fs';
 import { createHash } from 'crypto';
 
 export class P2PHandler extends BaseIpcHandler {
+  // 取消标志，用于中断文件扫描
+  private scanCancelFlag = false;
+
   /**
-   * 扫描目录中的文件并计算哈希
+   * 扫描目录中的文件并计算哈希（带进度回调）
    */
-  async scanAndHashFiles(event: IpcMainInvokeEvent, dirPath: string): Promise<any[]> {
+  async scanAndHashFilesWithProgress(event: IpcMainInvokeEvent, dirPath: string): Promise<any[]> {
+    this.scanCancelFlag = false;
     return this.handleAsync<any[]>(async () => {
       const files: any[] = [];
       
       try {
         const items = await readdir(dirPath);
+        const totalFiles = items.length;
         
-        for (const item of items) {
+        for (let i = 0; i < items.length; i++) {
+          // 检查是否取消
+          if (this.scanCancelFlag) {
+            throw new Error('文件扫描已取消');
+          }
+          
+          const item = items[i];
           const fullPath = join(dirPath, item);
           const stats = await stat(fullPath);
           
+          // 发送进度更新
+          event.sender.send('p2p:scan-progress', {
+            currentFile: item,
+            currentIndex: i + 1,
+            totalFiles: totalFiles,
+            progress: Math.round(((i + 1) / totalFiles) * 100)
+          });
+          
           if (stats.isFile()) {
-            const hash = await this.calculateFileHash(fullPath);
+            const hash = await this.calculateFileHashWithProgress(event, fullPath, item);
             files.push({
               fileName: item,
               filePath: fullPath,
@@ -30,7 +49,7 @@ export class P2PHandler extends BaseIpcHandler {
             });
           } else if (stats.isDirectory()) {
             // 递归扫描子目录（可选，根据需要启用）
-            // const subFiles = await this.scanAndHashFiles(event, fullPath);
+            // const subFiles = await this.scanAndHashFilesWithProgress(event, fullPath);
             // files.push(...subFiles);
           }
         }
@@ -49,7 +68,63 @@ export class P2PHandler extends BaseIpcHandler {
   }
 
   /**
-   * 计算文件的SHA-256哈希值
+   * 取消文件扫描
+   */
+  cancelScan(): void {
+    this.scanCancelFlag = true;
+  }
+
+  /**
+   * 扫描目录中的文件并计算哈希（旧方法，保持兼容）
+   */
+  async scanAndHashFiles(event: IpcMainInvokeEvent, dirPath: string): Promise<any[]> {
+    return this.scanAndHashFilesWithProgress(event, dirPath);
+  }
+
+  /**
+   * 计算文件的SHA-256哈希值（带进度回调）
+   */
+  private async calculateFileHashWithProgress(event: IpcMainInvokeEvent, filePath: string, fileName: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const hash = createHash('sha256');
+      const stream = createReadStream(filePath);
+      let processedBytes = 0;
+      
+      // 获取文件大小用于进度计算
+      stat(filePath).then(stats => {
+        const totalBytes = stats.size;
+        
+        stream.on('data', (data) => {
+          hash.update(data);
+          processedBytes += data.length;
+          
+          // 每处理1MB数据发送一次进度更新
+          if (processedBytes % (1024 * 1024) === 0 || processedBytes === totalBytes) {
+            event.sender.send('p2p:hash-progress', {
+              fileName: fileName,
+              filePath: filePath,
+              processedBytes: processedBytes,
+              totalBytes: totalBytes,
+              progress: Math.round((processedBytes / totalBytes) * 100)
+            });
+          }
+        });
+        
+        stream.on('end', () => {
+          resolve(hash.digest('hex'));
+        });
+        
+        stream.on('error', (err) => {
+          reject(err);
+        });
+      }).catch(err => {
+        reject(err);
+      });
+    });
+  }
+
+  /**
+   * 计算文件的SHA-256哈希值（旧方法，保持兼容）
    */
   private async calculateFileHash(filePath: string): Promise<string> {
     return new Promise((resolve, reject) => {

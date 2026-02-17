@@ -61,21 +61,71 @@
         <button 
           @click="selectShareDirectory" 
           class="btn btn-secondary"
-          :disabled="!isSignalingConnected"
+          :disabled="!isSignalingConnected || isScanning"
         >
           选择共享目录
         </button>
         <button 
           @click="registerSharedFiles" 
           class="btn btn-primary"
-          :disabled="!shareDirPath || !isSignalingConnected"
+          :disabled="!shareDirPath || !isSignalingConnected || isScanning"
         >
-          注册共享文件
+          {{ isScanning ? '扫描中...' : '注册共享文件' }}
+        </button>
+        <button 
+          v-if="isScanning"
+          @click="cancelFileScan"
+          class="btn btn-cancel"
+        >
+          取消
         </button>
       </div>
       
+      <!-- 扫描进度显示 -->
+      <div v-if="isScanning" class="scan-progress-container">
+        <div class="progress-header">
+          <div class="progress-title">
+            <span class="loading-icon">⏳</span>
+            <span>正在扫描文件并计算哈希...</span>
+          </div>
+          <div class="progress-percentage">{{ scanProgress.progress }}%</div>
+        </div>
+        
+        <!-- 总体进度条 -->
+        <div class="progress-bar-container">
+          <div class="progress-bar" :style="{ width: scanProgress.progress + '%' }"></div>
+        </div>
+        
+        <!-- 扫描详情 -->
+        <div class="progress-details">
+          <div class="detail-item">
+            <span class="detail-label">当前文件:</span>
+            <span class="detail-value">{{ scanProgress.currentFile || '准备中...' }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">文件进度:</span>
+            <span class="detail-value">{{ scanProgress.currentIndex }} / {{ scanProgress.totalFiles }}</span>
+          </div>
+        </div>
+        
+        <!-- 哈希计算进度 -->
+        <div v-if="hashProgress.fileName" class="hash-progress-container">
+          <div class="hash-progress-header">
+            <span class="hash-icon">🔐</span>
+            <span class="hash-filename">{{ hashProgress.fileName }}</span>
+          </div>
+          <div class="hash-progress-bar-container">
+            <div class="hash-progress-bar" :style="{ width: hashProgress.progress + '%' }"></div>
+          </div>
+          <div class="hash-progress-info">
+            <span>{{ formatFileSize(hashProgress.processedBytes) }} / {{ formatFileSize(hashProgress.totalBytes) }}</span>
+            <span>{{ hashProgress.progress }}%</span>
+          </div>
+        </div>
+      </div>
+      
       <!-- 我的共享文件列表 -->
-      <div class="my-shared-files" v-if="sharedFiles.length > 0">
+      <div class="my-shared-files" v-if="sharedFiles.length > 0 && !isScanning">
         <h4>我的共享文件 ({{ sharedFiles.length }})</h4>
         <div class="file-list">
           <div 
@@ -241,6 +291,21 @@ const selectedPeerId = ref('')
 const selectedFile = ref<File | null>(null)
 const transfers = ref<any[]>([])
 const logs = ref<any[]>([])
+
+// 文件扫描进度相关
+const isScanning = ref(false)
+const scanProgress = ref({
+  currentFile: '',
+  currentIndex: 0,
+  totalFiles: 0,
+  progress: 0
+})
+const hashProgress = ref({
+  fileName: '',
+  processedBytes: 0,
+  totalBytes: 0,
+  progress: 0
+})
 
 // 计算属性 - 获取唯一的对等连接（排除通道后缀）
 const uniqueP2PConnections = computed(() => {
@@ -497,31 +562,90 @@ const registerSharedFiles = async () => {
   }
 
   try {
-    // 扫描共享目录中的文件并计算哈希
-    const files = await window.electronAPI.invoke('p2p:scan-and-hash-files', shareDirPath.value)
+    // 设置扫描状态
+    isScanning.value = true
+    scanProgress.value = {
+      currentFile: '',
+      currentIndex: 0,
+      totalFiles: 0,
+      progress: 0
+    }
+    hashProgress.value = {
+      fileName: '',
+      processedBytes: 0,
+      totalBytes: 0,
+      progress: 0
+    }
     
-    // 更新本地共享文件列表
-    sharedFiles.value = files
+    addLog('info', '开始扫描共享目录并计算文件哈希...')
     
-    // 同步共享文件列表到主进程的P2P处理器
+    // 设置进度监听器
+    const scanProgressListener = (event: any, data: any) => {
+      scanProgress.value = {
+        currentFile: data.currentFile,
+        currentIndex: data.currentIndex,
+        totalFiles: data.totalFiles,
+        progress: data.progress
+      }
+    }
+    
+    const hashProgressListener = (event: any, data: any) => {
+      hashProgress.value = {
+        fileName: data.fileName,
+        processedBytes: data.processedBytes,
+        totalBytes: data.totalBytes,
+        progress: data.progress
+      }
+    }
+    
+    window.electronAPI.on('p2p:scan-progress', scanProgressListener)
+    window.electronAPI.on('p2p:hash-progress', hashProgressListener)
+    
     try {
-      await window.electronAPI.invoke(IPC_CHANNELS.P2P_SET_SHARED_FILES, files);
-    } catch (syncError) {
-      addLog('error', `同步共享文件列表到主进程失败: ${syncError}`)
-    }
-    
-    // 向信令服务器注册文件
-    if (socket) {
-      socket.emit('register-files', files.map(file => ({
-        hash: file.hash,
-        fileName: file.fileName,
-        fileSize: file.fileSize
-      })))
+      // 扫描共享目录中的文件并计算哈希
+      const files = await window.electronAPI.p2p.scanAndHashFiles(shareDirPath.value)
       
-      addLog('success', `已注册 ${files.length} 个共享文件到全局索引`)
+      // 更新本地共享文件列表
+      sharedFiles.value = files
+      
+      // 同步共享文件列表到主进程的P2P处理器
+      try {
+        await window.electronAPI.invoke(IPC_CHANNELS.P2P_SET_SHARED_FILES, files);
+      } catch (syncError) {
+        addLog('error', `同步共享文件列表到主进程失败: ${syncError}`)
+      }
+      
+      // 向信令服务器注册文件
+      if (socket) {
+        socket.emit('register-files', files.map(file => ({
+          hash: file.hash,
+          fileName: file.fileName,
+          fileSize: file.fileSize
+        })))
+        
+        addLog('success', `已注册 ${files.length} 个共享文件到全局索引`)
+      }
+    } finally {
+      // 移除进度监听器
+      window.electronAPI.removeListener('p2p:scan-progress', scanProgressListener)
+      window.electronAPI.removeListener('p2p:hash-progress', hashProgressListener)
+      isScanning.value = false
     }
-  } catch (error) {
-    addLog('error', `注册共享文件失败: ${error}`)
+  } catch (error: any) {
+    isScanning.value = false
+    if (error.message === '文件扫描已取消') {
+      addLog('warning', '文件扫描已取消')
+    } else {
+      addLog('error', `注册共享文件失败: ${error}`)
+    }
+  }
+}
+
+// 取消文件扫描
+const cancelFileScan = async () => {
+  if (isScanning.value) {
+    addLog('warning', '正在取消文件扫描...')
+    await window.electronAPI.p2p.cancelScan()
   }
 }
 
@@ -2849,6 +2973,230 @@ const addLog = (type: string, message: string) => {
 .btn-reconnect:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(245, 158, 11, 0.4);
+}
+
+.btn-cancel {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.btn-cancel:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+}
+
+.btn-small {
+  padding: 8px 16px;
+  font-size: 12px;
+  min-height: 36px;
+}
+
+/* 扫描进度容器 */
+.scan-progress-container {
+  margin-top: 20px;
+  padding: 24px;
+  background: linear-gradient(135deg, #ffffff 0%, #f9fafb 100%);
+  border-radius: 16px;
+  border: 2px solid #e5e7eb;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 进度头部 */
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.progress-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.loading-icon {
+  font-size: 24px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.1);
+  }
+}
+
+.progress-percentage {
+  font-size: 20px;
+  font-weight: 700;
+  color: #3b82f6;
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* 进度条容器 */
+.progress-bar-container {
+  width: 100%;
+  height: 12px;
+  background: #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 16px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%);
+  border-radius: 6px;
+  transition: width 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.3),
+    transparent
+  );
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* 进度详情 */
+.progress-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.detail-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f9fafb;
+  border-radius: 6px;
+  border-left: 3px solid #3b82f6;
+}
+
+.detail-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.detail-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+  font-family: 'Courier New', monospace;
+}
+
+/* 哈希进度容器 */
+.hash-progress-container {
+  margin-top: 16px;
+  padding: 16px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-radius: 12px;
+  border: 1px solid #fbbf24;
+  box-shadow: 0 2px 8px rgba(251, 191, 36, 0.2);
+}
+
+.hash-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.hash-icon {
+  font-size: 20px;
+  animation: rotate 2s linear infinite;
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hash-filename {
+  font-size: 14px;
+  font-weight: 600;
+  color: #92400e;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hash-progress-bar-container {
+  width: 100%;
+  height: 8px;
+  background: #fef3c7;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.hash-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #f59e0b 0%, #d97706 100%);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.hash-progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #92400e;
+  font-weight: 500;
 }
 
 .btn-small {

@@ -247,6 +247,14 @@ export class IpcManager {
     });
 
     this.registerHandler({
+      channel: IPC_CHANNELS.P2P_CANCEL_SCAN,
+      handler: (event: IpcMainInvokeEvent): Promise<any> => {
+        this.p2pHandler.cancelScan();
+        return Promise.resolve({ success: true });
+      },
+    });
+
+    this.registerHandler({
       channel: IPC_CHANNELS.P2P_REGISTER_FILES,
       handler: (event: IpcMainInvokeEvent, files: any[]): Promise<any> => {
         return this.p2pHandler.registerFilesWithSignalServer(event, files);

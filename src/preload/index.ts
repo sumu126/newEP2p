@@ -53,5 +53,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     
     // 获取传输列表
     getTransfers: () => ipcRenderer.invoke('p2p:get-transfers'),
+    
+    // 扫描并哈希文件
+    scanAndHashFiles: (dirPath: string) => 
+      ipcRenderer.invoke('p2p:scan-and-hash-files', dirPath),
+    
+    // 取消文件扫描
+    cancelScan: () => 
+      ipcRenderer.invoke('p2p:cancel-scan'),
+    
+    // 监听扫描进度
+    onScanProgress: (callback: (data: any) => void) => 
+      ipcRenderer.on('p2p:scan-progress', (event, data) => callback(data)),
+    
+    // 监听哈希进度
+    onHashProgress: (callback: (data: any) => void) => 
+      ipcRenderer.on('p2p:hash-progress', (event, data) => callback(data)),
+    
+    // 移除进度监听器
+    removeScanProgressListener: (callback: (event: any, data: any) => void) => 
+      ipcRenderer.removeListener('p2p:scan-progress', callback),
+    
+    removeHashProgressListener: (callback: (event: any, data: any) => void) => 
+      ipcRenderer.removeListener('p2p:hash-progress', callback),
   },
 });
