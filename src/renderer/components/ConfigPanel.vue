@@ -6,15 +6,23 @@
       <h4>外观设置</h4>
       <div class="form-group">
         <label>主题:</label>
-        <select 
-          :value="localConfig.theme" 
-          @change="handleThemeChange"
-          class="form-control"
-        >
-          <option value="light">浅色</option>
-          <option value="dark">深色</option>
-          <option value="auto">跟随系统</option>
-        </select>
+        <div class="theme-selector">
+          <div 
+            v-for="theme in themes" 
+            :key="theme.value"
+            :class="['theme-option', { active: localConfig.theme === theme.value }]"
+            @click="handleThemeClick(theme.value)"
+          >
+            <div 
+              class="theme-preview" 
+              :style="{ background: theme.primary, '--sidebar-bg': theme.sidebar }"
+            >
+              <div class="preview-sidebar" :style="{ background: theme.sidebar }"></div>
+              <div class="preview-content"></div>
+            </div>
+            <span class="theme-name">{{ theme.name }}</span>
+          </div>
+        </div>
       </div>
       
       <div class="form-group">
@@ -84,13 +92,37 @@ import { ref, watch, onUnmounted } from 'vue';
 import { useConfig } from '../composables/useConfig';
 import { AppConfig } from '@shared/types';
 
-// 使用配置composable
+type ThemeType = 'dark-green' | 'dark-black' | 'light-blue';
+
+const themes = [
+  {
+    value: 'dark-green' as ThemeType,
+    name: '墨绿色',
+    primary: 'linear-gradient(135deg, #064e3b 0%, #065f46 100%)',
+    sidebar: 'linear-gradient(160deg, #064e3b 0%, #047857 100%)'
+  },
+  {
+    value: 'dark-black' as ThemeType,
+    name: '暗黑色',
+    primary: 'linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%)',
+    sidebar: 'linear-gradient(160deg, #1a1a1a 0%, #262626 100%)'
+  },
+  {
+    value: 'light-blue' as ThemeType,
+    name: '浅蓝色',
+    primary: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+    sidebar: 'linear-gradient(160deg, #1e40af 0%, #2563eb 100%)'
+  }
+];
+
+const emit = defineEmits<{
+  (e: 'theme-change', theme: ThemeType): void;
+}>();
+
 const { config, loading, error, updateConfig, cleanup } = useConfig();
 
-// 本地配置副本，用于编辑
 const localConfig = ref<AppConfig>({ ...config.value });
 
-// 监听远程配置变化
 watch(
   () => config.value,
   (newConfig) => {
@@ -99,16 +131,14 @@ watch(
   { deep: true }
 );
 
-// 处理主题变化
-const handleThemeChange = (event: Event) => {
-  const target = event.target as HTMLSelectElement;
+const handleThemeClick = (theme: ThemeType) => {
   localConfig.value = {
     ...localConfig.value,
-    theme: target.value as 'light' | 'dark' | 'auto'
+    theme: theme
   };
+  emit('theme-change', theme);
 };
 
-// 处理语言变化
 const handleLanguageChange = (event: Event) => {
   const target = event.target as HTMLSelectElement;
   localConfig.value = {
@@ -187,6 +217,62 @@ onUnmounted(() => {
   outline: none;
   border-color: #007bff;
   box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+.theme-selector {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  min-width: 100px;
+}
+
+.theme-option:hover {
+  border-color: #3b82f6;
+  transform: translateY(-2px);
+}
+
+.theme-option.active {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+}
+
+.theme-preview {
+  width: 80px;
+  height: 50px;
+  border-radius: 6px;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+.preview-sidebar {
+  width: 20px;
+  height: 100%;
+}
+
+.preview-content {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 4px;
+  border-radius: 2px;
+}
+
+.theme-name {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #555;
+  font-weight: 500;
 }
 
 .checkbox-group {

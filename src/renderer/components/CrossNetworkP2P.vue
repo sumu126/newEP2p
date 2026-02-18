@@ -3405,6 +3405,561 @@ const addLog = (type: string, message: string) => {
 }
 </script>
 
+<style>
+.cross-network-p2p {
+  background: var(--bg-primary) !important;
+}
+
+.cross-network-p2p .page-title {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p h2,
+.cross-network-p2p h3,
+.cross-network-p2p h4 {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .section-title {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .section-header {
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .panel {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .panel-header {
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .panel-title {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .form-input,
+.cross-network-p2p input[type="text"] {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .form-input:focus,
+.cross-network-p2p input[type="text"]:focus {
+  border-color: var(--accent-primary) !important;
+}
+
+.cross-network-p2p .room-info,
+.cross-network-p2p .connection-status {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .connection-info {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .file-list-section {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .file-list {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .file-item {
+  border-color: var(--border-color) !important;
+  background: var(--bg-card) !important;
+}
+
+.cross-network-p2p .file-item:hover {
+  background: var(--bg-card-hover) !important;
+}
+
+.cross-network-p2p .file-name {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .file-size {
+  color: var(--text-secondary) !important;
+  background: var(--bg-input) !important;
+}
+
+.cross-network-p2p .file-info {
+  background: var(--bg-input) !important;
+}
+
+.cross-network-p2p .file-info .file-name {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .file-info .file-size {
+  color: var(--text-secondary) !important;
+  background: var(--bg-card) !important;
+}
+
+.cross-network-p2p .file-meta {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .btn-copy-hash {
+  background: var(--bg-button-primary) !important;
+  color: var(--text-white) !important;
+}
+
+.cross-network-p2p .result-list {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .result-item {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .result-item:hover {
+  background: var(--bg-card-hover) !important;
+  border-color: var(--accent-primary) !important;
+}
+
+.cross-network-p2p .result-item.exact {
+  background: var(--bg-card-hover) !important;
+  border-color: var(--accent-secondary) !important;
+}
+
+.cross-network-p2p .log-container {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .log-entry {
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .log-timestamp {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .log-message {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .node-info {
+  background: var(--bg-card-hover) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .node-id {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .connection-item {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .connection-item:hover {
+  background: var(--bg-card-hover) !important;
+}
+
+.cross-network-p2p .peer-id {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .connection-meta {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .btn {
+  color: var(--text-white) !important;
+}
+
+.cross-network-p2p .btn-primary {
+  background: var(--bg-button-primary) !important;
+}
+
+.cross-network-p2p .btn-secondary {
+  background: var(--bg-button-secondary) !important;
+}
+
+.cross-network-p2p .btn-copy {
+  background: var(--bg-button-primary) !important;
+  color: var(--text-white) !important;
+}
+
+.cross-network-p2p .btn-disconnect {
+  background: var(--bg-button-secondary) !important;
+  color: var(--text-white) !important;
+}
+
+.cross-network-p2p .transfer-actions .btn {
+  color: var(--text-white) !important;
+}
+
+.cross-network-p2p .btn-download {
+  background: var(--accent-gradient) !important;
+}
+
+.cross-network-p2p .btn-upload {
+  background: var(--bg-button-primary) !important;
+}
+
+.cross-network-p2p .node-list-section {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .node-list-title {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .node-card {
+  background: var(--bg-card-hover) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .node-card:hover {
+  border-color: var(--accent-primary) !important;
+}
+
+.cross-network-p2p .node-card.selected {
+  border-color: var(--accent-primary) !important;
+  background: var(--bg-input) !important;
+}
+
+.cross-network-p2p .node-name {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .node-status {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .node-stats {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .stat-value {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .stat-label {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .transfer-stats {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .stat-item .value {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .stat-item .label {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .transfer-list-section {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .transfer-list-header {
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .transfer-list {
+  background: var(--bg-input) !important;
+}
+
+.cross-network-p2p .transfer-item {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .transfer-item:hover {
+  background: var(--bg-card-hover) !important;
+}
+
+.cross-network-p2p .transfer-file-name {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .transfer-meta {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .transfer-progress-bar {
+  background: var(--border-color) !important;
+}
+
+.cross-network-p2p .transfer-progress-fill {
+  background: var(--accent-gradient) !important;
+}
+
+.cross-network-p2p .transfer-status {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .empty-state {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .empty-icon {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .empty-text {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .modal-overlay {
+  background: rgba(0, 0, 0, 0.6) !important;
+}
+
+.cross-network-p2p .modal {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .modal-header {
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .modal-body {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .form-group label {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .form-control {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .form-control:focus {
+  border-color: var(--accent-primary) !important;
+}
+
+.cross-network-p2p .form-text {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .modal-footer {
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .chunk-allocation-item {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .allocation-peer-id {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .allocation-meta {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .allocation-status {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .chunk-allocation-visualization {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .visualization-header {
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .chunk-grid {
+  background: var(--bg-card) !important;
+}
+
+.cross-network-p2p .legend {
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .legend-title {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .legend-item span {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .visualization-stats {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .visualization-stats strong {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .search-hint,
+.cross-network-p2p .hash-progress-container {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+.cross-network-p2p .search-hint {
+  border-left: 4px solid var(--accent-primary) !important;
+}
+
+.cross-network-p2p .hash-filename,
+.cross-network-p2p .hash-progress-info {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .hash-progress-bar-container {
+  background: var(--border-color) !important;
+}
+
+.cross-network-p2p .hash-progress-bar {
+  background: var(--accent-gradient) !important;
+}
+
+.cross-network-p2p .server-status-card {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .status-label {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .connection-status-badge.connected {
+  background: rgba(16, 185, 129, 0.15) !important;
+  color: var(--accent-secondary) !important;
+  border-color: rgba(16, 185, 129, 0.3) !important;
+}
+
+.cross-network-p2p .connection-status-badge.disconnected {
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: #ef4444 !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+}
+
+.cross-network-p2p .result-item {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .result-item:hover {
+  background: var(--bg-card-hover) !important;
+  border-color: var(--accent-primary) !important;
+}
+
+.cross-network-p2p .result-item .file-name {
+  color: var(--accent-primary) !important;
+}
+
+.cross-network-p2p .result-item .file-size {
+  background: var(--bg-input) !important;
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .node-count {
+  background: var(--bg-input) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .connection-list {
+  background: var(--bg-input) !important;
+}
+
+.cross-network-p2p .peer-info .peer-name {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .peer-info .peer-meta {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .transfer-list .transfer-header {
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .transfer-item {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .transfer-item:hover {
+  background: var(--bg-card-hover) !important;
+}
+
+.cross-network-p2p .transfer-item .file-name {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .transfer-item .transfer-meta {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .progress-container {
+  background: var(--border-color) !important;
+}
+
+.cross-network-p2p .progress-fill {
+  background: var(--accent-gradient) !important;
+}
+
+.cross-network-p2p .transfer-status {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .log-container {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .log-item {
+  border-color: var(--border-color) !important;
+}
+
+.cross-network-p2p .log-item .log-time {
+  color: var(--text-secondary) !important;
+}
+
+.cross-network-p2p .log-item .log-message {
+  color: var(--text-primary) !important;
+}
+
+.cross-network-p2p .log-item.warning .log-message {
+  color: #f59e0b !important;
+}
+
+.cross-network-p2p .log-item.error .log-message {
+  color: #ef4444 !important;
+}
+
+.cross-network-p2p .log-item.success .log-message {
+  color: var(--accent-secondary) !important;
+}
+</style>
+
 <style scoped>
 .cross-network-p2p {
   width: 100%;
@@ -3412,7 +3967,6 @@ const addLog = (type: string, message: string) => {
   margin: 0;
   padding: 24px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
   overflow-y: auto;
   display: flex;
   flex-direction: column;

@@ -1,5 +1,5 @@
 <template>
-  <div class="app-container">
+  <div class="app-container" :class="themeClass">
     <aside class="sidebar">
       <div class="logo">
         <h2>{{ title }}</h2>
@@ -80,6 +80,27 @@
         <!-- 配置内容 -->
         <div class="page-content" :class="{ active: activeMenu === 'config' }" v-show="activeMenu === 'config'">
           <div class="config-section">
+            <h3>主题设置</h3>
+            <div class="form-group">
+              <label>选择主题:</label>
+              <div class="theme-selector">
+                <div 
+                  v-for="theme in themes" 
+                  :key="theme.value"
+                  :class="['theme-option', { active: currentTheme === theme.value }]"
+                  @click="saveTheme(theme.value)"
+                >
+                  <div class="theme-preview-wrapper" :style="{ background: theme.primary }">
+                    <div class="preview-sidebar-mini" :style="{ background: theme.sidebar }"></div>
+                    <div class="preview-content-mini"></div>
+                  </div>
+                  <span class="theme-label">{{ theme.name }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="config-section">
             <h3>信令服务器配置</h3>
             <div class="form-group">
               <label for="server-url">服务器地址:</label>
@@ -157,12 +178,56 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import CrossNetworkP2P from './components/CrossNetworkP2P.vue'
 import FileTransferList from './components/FileTransferList.vue'
 
 const title = ref('P2P文件传输')
 const activeMenu = ref('home') // 默认首页
+
+type ThemeType = 'dark-green' | 'dark-black' | 'light-blue';
+const currentTheme = ref<ThemeType>('dark-green');
+
+const themes = [
+  {
+    value: 'dark-green' as ThemeType,
+    name: '墨绿色',
+    primary: 'linear-gradient(135deg, #064e3b 0%, #065f46 100%)',
+    sidebar: 'linear-gradient(160deg, #064e3b 0%, #047857 100%)'
+  },
+  {
+    value: 'dark-black' as ThemeType,
+    name: '暗黑色',
+    primary: 'linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%)',
+    sidebar: 'linear-gradient(160deg, #1a1a1a 0%, #262626 100%)'
+  },
+  {
+    value: 'light-blue' as ThemeType,
+    name: '浅蓝色',
+    primary: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+    sidebar: 'linear-gradient(160deg, #1e40af 0%, #2563eb 100%)'
+  }
+];
+
+const themeClass = computed(() => `theme-${currentTheme.value}`);
+
+const loadTheme = () => {
+  const savedTheme = localStorage.getItem('appTheme') as ThemeType;
+  if (savedTheme) {
+    currentTheme.value = savedTheme;
+  }
+};
+
+const saveTheme = (theme: ThemeType) => {
+  currentTheme.value = theme;
+  localStorage.setItem('appTheme', theme);
+};
+
+loadTheme();
+
+watch(currentTheme, (newTheme) => {
+  document.documentElement.setAttribute('data-theme', newTheme);
+}, { immediate: true });
 
 // 配置相关
 const showConfigDialog = ref(false)
@@ -280,25 +345,238 @@ const closeConfigDialog = () => {
   tempServerUrl.value = signalingServerUrl.value
   showConfigDialog.value = false
 }
+
+defineExpose({
+  currentTheme,
+  saveTheme
+});
 </script>
+
+<style>
+:root {
+  --bg-primary: linear-gradient(135deg, #f0f2f5 0%, #e6e9ef 100%);
+  --bg-sidebar: linear-gradient(160deg, #2c3e50 0%, #34495e 100%);
+  --bg-header: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8f9fa;
+  --bg-input: #f9fafb;
+  --bg-button-primary: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  --bg-button-secondary: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+  
+  --text-primary: #333333;
+  --text-secondary: #6b7280;
+  --text-light: rgba(255, 255, 255, 0.7);
+  --text-white: #ffffff;
+  
+  --border-color: #e5e7eb;
+  --border-light: rgba(255, 255, 255, 0.15);
+  
+  --accent-gradient: linear-gradient(135deg, #3498db 0%, #2ecc71 100%);
+  --accent-primary: #3b82f6;
+  --accent-secondary: #10b981;
+  
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.2);
+}
+
+.theme-dark-green {
+  --bg-primary: linear-gradient(135deg, #064e3b 0%, #065f46 100%);
+  --bg-sidebar: linear-gradient(160deg, #064e3b 0%, #047857 100%);
+  --bg-header: linear-gradient(135deg, #065f46 0%, #047857 100%);
+  --bg-card: rgba(6, 78, 59, 0.8);
+  --bg-card-hover: rgba(6, 95, 70, 0.9);
+  --bg-input: rgba(4, 120, 87, 0.3);
+  --bg-button-primary: linear-gradient(135deg, #059669 0%, #047857 100%);
+  --bg-button-secondary: linear-gradient(135deg, #065f46 0%, #064e3b 100%);
+  
+  --text-primary: #ecfdf5;
+  --text-secondary: #a7f3d0;
+  --text-light: rgba(167, 243, 208, 0.7);
+  --text-white: #ecfdf5;
+  
+  --border-color: rgba(16, 185, 129, 0.3);
+  --border-light: rgba(16, 185, 129, 0.2);
+  
+  --accent-gradient: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+  --accent-primary: #10b981;
+  --accent-secondary: #34d399;
+}
+
+.theme-dark-black {
+  --bg-primary: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%);
+  --bg-sidebar: linear-gradient(160deg, #1a1a1a 0%, #262626 100%);
+  --bg-header: linear-gradient(135deg, #1f1f1f 0%, #262626 100%);
+  --bg-card: rgba(38, 38, 38, 0.9);
+  --bg-card-hover: rgba(48, 48, 48, 0.95);
+  --bg-input: rgba(64, 64, 64, 0.5);
+  --bg-button-primary: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+  --bg-button-secondary: linear-gradient(135deg, #404040 0%, #262626 100%);
+  
+  --text-primary: #fafafa;
+  --text-secondary: #a3a3a3;
+  --text-light: rgba(163, 163, 163, 0.7);
+  --text-white: #fafafa;
+  
+  --border-color: rgba(115, 115, 115, 0.3);
+  --border-light: rgba(115, 115, 115, 0.15);
+  
+  --accent-gradient: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
+  --accent-primary: #8b5cf6;
+  --accent-secondary: #a78bfa;
+}
+
+.theme-light-blue {
+  --bg-primary: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  --bg-sidebar: linear-gradient(160deg, #1e40af 0%, #2563eb 100%);
+  --bg-header: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
+  --bg-card: #ffffff;
+  --bg-card-hover: #eff6ff;
+  --bg-input: #f0f9ff;
+  --bg-button-primary: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  --bg-button-secondary: linear-gradient(135deg, #64748b 0%, #475569 100%);
+  
+  --text-primary: #1e293b;
+  --text-secondary: #64748b;
+  --text-light: rgba(255, 255, 255, 0.8);
+  --text-white: #ffffff;
+  
+  --border-color: #bfdbfe;
+  --border-light: rgba(255, 255, 255, 0.2);
+  
+  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
+  --accent-primary: #2563eb;
+  --accent-secondary: #60a5fa;
+}
+
+/* FileTransferList 组件主题覆盖 */
+.file-transfer-list {
+  background: var(--bg-card) !important;
+}
+
+.file-transfer-list h3 {
+  color: var(--text-primary) !important;
+}
+
+.file-transfer-list .empty-state {
+  background: var(--bg-input) !important;
+  color: var(--text-secondary) !important;
+}
+
+.file-transfer-list .transfers-container {
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+}
+
+.file-transfer-list .transfer-item {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.file-transfer-list .transfer-item:hover {
+  background: var(--bg-card-hover) !important;
+}
+
+.file-transfer-list .transfer-item.transferring {
+  background: var(--bg-card) !important;
+  border-left-color: var(--accent-primary) !important;
+}
+
+.file-transfer-list .transfer-item.completed {
+  background: var(--bg-card) !important;
+  border-left-color: var(--accent-secondary) !important;
+}
+
+.file-transfer-list .transfer-item.error,
+.file-transfer-list .transfer-item.cancelled {
+  background: var(--bg-card) !important;
+}
+
+.file-transfer-list .file-name {
+  color: var(--text-primary) !important;
+}
+
+.file-transfer-list .transfer-details {
+  color: var(--text-secondary) !important;
+}
+
+.file-transfer-list .direction.send {
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: #ef4444 !important;
+}
+
+.file-transfer-list .direction.receive {
+  background: rgba(59, 130, 246, 0.15) !important;
+  color: var(--accent-primary) !important;
+}
+
+.file-transfer-list .progress-bar {
+  background: var(--border-color) !important;
+}
+
+.file-transfer-list .progress-fill {
+  background: var(--accent-gradient) !important;
+}
+
+.file-transfer-list .progress-text {
+  color: var(--text-secondary) !important;
+}
+
+.file-transfer-list .speed {
+  color: var(--text-secondary) !important;
+}
+
+.file-transfer-list .status {
+  color: var(--text-secondary) !important;
+}
+
+.file-transfer-list .status.transferring {
+  color: var(--accent-primary) !important;
+}
+
+.file-transfer-list .status.completed {
+  color: var(--accent-secondary) !important;
+}
+
+.file-transfer-list .status.error,
+.file-transfer-list .status.cancelled {
+  color: #ef4444 !important;
+}
+
+.file-transfer-list .cancel-btn,
+.file-transfer-list .open-btn {
+  color: var(--text-primary) !important;
+  background: var(--bg-input) !important;
+  border-color: var(--border-color) !important;
+}
+
+.file-transfer-list .cancel-btn:hover,
+.file-transfer-list .open-btn:hover {
+  background: var(--bg-card-hover) !important;
+}
+
+.file-transfer-list .transfer-time {
+  color: var(--text-secondary) !important;
+}
+</style>
 
 <style scoped>
 .app-container {
   min-height: 100vh;
   display: flex;
-  background: linear-gradient(135deg, #f0f2f5 0%, #e6e9ef 100%);
+  background: var(--bg-primary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .sidebar {
   width: 280px;
-  background: linear-gradient(160deg, #2c3e50 0%, #34495e 100%);
-  color: white;
+  background: var(--bg-sidebar);
+  color: var(--text-white);
   display: flex;
   flex-direction: column;
   padding: 2rem 0;
-  box-shadow: 4px 0 25px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-md);
   z-index: 100;
   position: fixed;
   top: 0;
@@ -317,13 +595,13 @@ const closeConfigDialog = () => {
 }
 
 .sidebar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--border-light);
   border-radius: 3px;
 }
 
 .logo {
   padding: 0 2rem 2rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  border-bottom: 1px solid var(--border-light);
   text-align: center;
 }
 
@@ -331,7 +609,7 @@ const closeConfigDialog = () => {
   margin: 0;
   font-size: 1.8rem;
   font-weight: 700;
-  background: linear-gradient(135deg, #3498db 0%, #2ecc71 100%);
+  background: var(--accent-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -349,7 +627,7 @@ const closeConfigDialog = () => {
   display: flex;
   align-items: center;
   padding: 1.2rem 2rem;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-light);
   text-decoration: none;
   transition: all 0.3s ease;
   font-size: 1.1rem;
@@ -376,14 +654,14 @@ const closeConfigDialog = () => {
 
 .menu-item:hover {
   background: rgba(255, 255, 255, 0.1);
-  color: white;
+  color: var(--text-white);
   transform: translateX(4px);
 }
 
 .menu-item.active {
   background: linear-gradient(90deg, rgba(52, 152, 219, 0.2) 0%, rgba(46, 204, 113, 0.2) 100%);
-  color: white;
-  border-left: 4px solid #3498db;
+  color: var(--text-white);
+  border-left: 4px solid var(--accent-primary);
   box-shadow: inset 2px 0 8px rgba(0, 0, 0, 0.2);
 }
 
@@ -418,19 +696,18 @@ const closeConfigDialog = () => {
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem 2rem;
-  background: white;
+  background: var(--bg-header);
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
-  border-bottom: 1px solid #eaeaea;
+  border-bottom: 1px solid var(--border-color);
   z-index: 10;
-  background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
 }
 
 .app-header h1 {
   margin: 0;
-  color: #2c3e50;
+  color: var(--text-primary);
   font-size: 1.8rem;
   font-weight: 700;
-  background: linear-gradient(135deg, #3498db 0%, #2ecc71 100%);
+  background: var(--accent-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -440,7 +717,7 @@ const closeConfigDialog = () => {
   flex: 1;
   padding: 0;
   overflow: hidden;
-  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  background: var(--bg-primary);
 }
 
 .page-content {
@@ -458,12 +735,12 @@ const closeConfigDialog = () => {
 }
 
 .stats-card {
-  background: white;
+  background: var(--bg-card);
   border-radius: 16px;
   padding: 2rem;
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow-sm);
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-color);
   transition: transform 0.3s ease, box-shadow 0.3s ease;
   position: relative;
   overflow: hidden;
@@ -476,17 +753,17 @@ const closeConfigDialog = () => {
   left: 0;
   right: 0;
   height: 4px;
-  background: linear-gradient(90deg, #3498db, #2ecc71);
+  background: var(--accent-gradient);
 }
 
 .stats-card:hover {
   transform: translateY(-5px);
-  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
 }
 
 .stats-card h3 {
   margin-top: 0;
-  color: #2c3e50;
+  color: var(--text-primary);
   font-size: 1.2rem;
   font-weight: 600;
   margin-bottom: 1.5rem;
@@ -502,19 +779,19 @@ const closeConfigDialog = () => {
   left: 0;
   width: 40px;
   height: 3px;
-  background: linear-gradient(90deg, #3498db, #2ecc71);
+  background: var(--accent-gradient);
   border-radius: 2px;
 }
 
 .stats-card p {
   margin: 1rem 0;
-  color: #495057;
+  color: var(--text-secondary);
   font-size: 1.1rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 0.5rem 0;
-  border-bottom: 1px dashed #eee;
+  border-bottom: 1px dashed var(--border-color);
 }
 
 .stats-card p:last-child {
@@ -548,7 +825,7 @@ const closeConfigDialog = () => {
 
 .transfer-panel:first-child {
   flex: 3;
-  border-right: 1px solid #e2e8f0;
+  border-right: 1px solid var(--border-color);
   min-width: 0;
   padding: 0;
 }
@@ -589,11 +866,11 @@ const closeConfigDialog = () => {
 
 /* 配置页面样式 */
 .config-section {
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  background: var(--bg-card);
   border-radius: 16px;
   padding: 2rem;
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
-  border: 1px solid #f1f5f9;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
   max-width: 800px;
   margin: 2rem auto;
   width: 100%;
@@ -601,7 +878,7 @@ const closeConfigDialog = () => {
 }
 
 .config-section h3 {
-  color: #1e293b;
+  color: var(--text-primary);
   margin-top: 0;
   margin-bottom: 1.5rem;
   font-size: 1.25rem;
@@ -617,7 +894,7 @@ const closeConfigDialog = () => {
   content: '';
   width: 8px;
   height: 8px;
-  background: linear-gradient(135deg, #3b82f6 0%, #10b981 100%);
+  background: var(--accent-gradient);
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -629,7 +906,7 @@ const closeConfigDialog = () => {
   left: 0;
   width: 100%;
   height: 2px;
-  background: linear-gradient(90deg, #3b82f6, #10b981, transparent);
+  background: var(--accent-gradient);
   border-radius: 1px;
 }
 
@@ -642,7 +919,7 @@ const closeConfigDialog = () => {
   display: block;
   margin-bottom: 0.75rem;
   font-weight: 600;
-  color: #374151;
+  color: var(--text-secondary);
   font-size: 0.875rem;
   text-transform: uppercase;
   letter-spacing: 0.025em;
@@ -651,26 +928,26 @@ const closeConfigDialog = () => {
 .form-input {
   width: 100%;
   padding: 1rem 1.25rem;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   font-size: 1rem;
   transition: all 0.3s ease;
   box-sizing: border-box;
-  background: #f9fafb;
-  color: #374151;
+  background: var(--bg-input);
+  color: var(--text-primary);
   font-family: inherit;
 }
 
 .form-input:focus {
   outline: none;
-  border-color: #3b82f6;
+  border-color: var(--accent-primary);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-  background: white;
+  background: var(--bg-card);
   transform: translateY(-1px);
 }
 
 .form-input::placeholder {
-  color: #9ca3af;
+  color: var(--text-secondary);
 }
 
 .input-with-button {
@@ -690,7 +967,7 @@ const closeConfigDialog = () => {
   justify-content: center;
   margin-top: 3rem;
   padding-top: 2rem;
-  border-top: 1px solid #f1f5f9;
+  border-top: 1px solid var(--border-color);
   gap: 1rem;
 }
 
@@ -711,8 +988,8 @@ const closeConfigDialog = () => {
 }
 
 .config-section .btn-primary {
-  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
-  color: white;
+  background: var(--bg-button-primary);
+  color: var(--text-white);
   box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
 
@@ -722,8 +999,8 @@ const closeConfigDialog = () => {
 }
 
 .config-section .btn-secondary {
-  background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
-  color: white;
+  background: var(--bg-button-secondary);
+  color: var(--text-white);
   box-shadow: 0 4px 12px rgba(107, 114, 128, 0.3);
 }
 
@@ -737,6 +1014,64 @@ const closeConfigDialog = () => {
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+.theme-selector {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 15px;
+  border: 2px solid var(--border-color);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  min-width: 120px;
+  background: var(--bg-card);
+}
+
+.theme-option:hover {
+  border-color: var(--accent-primary);
+  transform: translateY(-3px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+}
+
+.theme-option.active {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+}
+
+.theme-preview-wrapper {
+  width: 90px;
+  height: 60px;
+  border-radius: 8px;
+  display: flex;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.preview-sidebar-mini {
+  width: 22px;
+  height: 100%;
+}
+
+.preview-content-mini {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.2);
+  margin: 4px;
+  border-radius: 3px;
+}
+
+.theme-label {
+  margin-top: 10px;
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 500;
 }
 
 /* 响应式设计 */
@@ -827,10 +1162,10 @@ const closeConfigDialog = () => {
   text-align: center;
   max-width: 500px;
   padding: 3rem;
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  background: var(--bg-card);
   border-radius: 20px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
-  border: 1px solid #f1f5f9;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-color);
 }
 
 .empty-icon {
@@ -852,7 +1187,7 @@ const closeConfigDialog = () => {
 }
 
 .empty-content h2 {
-  color: #1e293b;
+  color: var(--text-primary);
   margin: 0 0 0.75rem 0;
   font-weight: 700;
   font-size: 1.75rem;
@@ -860,7 +1195,7 @@ const closeConfigDialog = () => {
 }
 
 .empty-content p {
-  color: #6b7280;
+  color: var(--text-secondary);
   margin: 0 0 2.5rem 0;
   font-size: 1.1rem;
   line-height: 1.5;
@@ -885,14 +1220,14 @@ const closeConfigDialog = () => {
 }
 
 .empty-actions .btn-primary {
-  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
-  color: white;
+  background: var(--bg-button-primary);
+  color: var(--text-white);
   box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
 
 .empty-actions .btn-secondary {
-  background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
-  color: white;
+  background: var(--bg-button-secondary);
+  color: var(--text-white);
   box-shadow: 0 4px 12px rgba(107, 114, 128, 0.3);
 }
 
@@ -934,30 +1269,6 @@ const closeConfigDialog = () => {
   }
 }
 
-/* 暗色模式支持 */
-@media (prefers-color-scheme: dark) {
-  .empty-content {
-    background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
-    border-color: #374151;
-  }
-  
-  .empty-content h2 {
-    color: #e5e7eb;
-  }
-  
-  .empty-content p {
-    color: #9ca3af;
-  }
-  
-  .empty-actions .btn-primary {
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
-  }
-  
-  .empty-actions .btn-secondary {
-    box-shadow: 0 4px 12px rgba(107, 114, 128, 0.4);
-  }
-}
-
 /* 按钮基础样式 */
 .btn:hover {
   transform: translateY(-2px);
@@ -969,21 +1280,21 @@ const closeConfigDialog = () => {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
-  color: white;
+  background: var(--bg-button-primary);
+  color: var(--text-white);
 }
 
 .btn-primary:hover {
-  background: linear-gradient(135deg, #2980b9 0%, #2573a7 100%);
+  filter: brightness(0.9);
 }
 
 .btn-secondary {
-  background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%);
-  color: white;
+  background: var(--bg-button-secondary);
+  color: var(--text-white);
 }
 
 .btn-secondary:hover {
-  background: linear-gradient(135deg, #7f8c8d 0%, #6c7a7d 100%);
+  filter: brightness(0.9);
 }
 
 .btn:disabled {
@@ -1000,7 +1311,8 @@ const closeConfigDialog = () => {
   left: 0;
   width: 100%;
   height: 100%;
-  background: linear-gradient(135deg, rgba(52, 152, 219, 0.85) 0%, rgba(46, 204, 113, 0.85) 100%);
+  background: var(--accent-gradient);
+  opacity: 0.9;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -1015,15 +1327,15 @@ const closeConfigDialog = () => {
 }
 
 .config-modal {
-  background: white;
+  background: var(--bg-card);
   border-radius: 20px;
-  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-lg);
   width: 90%;
   max-width: 600px;
   max-height: 90vh;
   overflow-y: auto;
   animation: modalSlideIn 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-color);
   overflow: hidden;
 }
 
@@ -1043,17 +1355,17 @@ const closeConfigDialog = () => {
   justify-content: space-between;
   align-items: center;
   padding: 1.8rem;
-  border-bottom: 1px solid #eee;
-  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-header);
   border-radius: 20px 20px 0 0;
 }
 
 .config-header h3 {
   margin: 0;
-  color: #2c3e50;
+  color: var(--text-primary);
   font-size: 1.4rem;
   font-weight: 700;
-  background: linear-gradient(135deg, #3498db 0%, #2ecc71 100%);
+  background: var(--accent-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -1072,13 +1384,13 @@ const closeConfigDialog = () => {
   justify-content: center;
   border-radius: 50%;
   transition: all 0.2s ease;
-  color: #6c757d;
+  color: var(--text-secondary);
   font-weight: normal;
 }
 
 .btn-close:hover {
-  background-color: #f8f9fa;
-  color: #495057;
+  background-color: var(--bg-card-hover);
+  color: var(--text-primary);
   transform: rotate(90deg);
 }
 

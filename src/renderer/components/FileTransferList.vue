@@ -234,11 +234,106 @@ const getStatusText = (status: string): string => {
 }
 </script>
 
+<style>
+.file-transfer-list {
+  background: var(--bg-card) !important;
+}
+
+.file-transfer-list h3 {
+  color: var(--text-primary) !important;
+}
+
+.file-transfer-list .empty-state {
+  color: var(--text-secondary) !important;
+  background: var(--bg-input) !important;
+}
+
+.file-transfer-list .transfer-item {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.file-transfer-list .transfer-item:hover {
+  background: var(--bg-card-hover) !important;
+}
+
+.file-transfer-list .file-name {
+  color: var(--text-primary) !important;
+}
+
+.file-transfer-list .file-meta {
+  color: var(--text-secondary) !important;
+}
+
+.file-transfer-list .file-size,
+.file-transfer-list .speed,
+.file-transfer-list .progress-text {
+  color: var(--text-secondary) !important;
+}
+
+.file-transfer-list .progress-bar-bg,
+.file-transfer-list .progress-bar {
+  background: var(--border-color) !important;
+}
+
+.file-transfer-list .progress-fill {
+  background: var(--accent-gradient) !important;
+}
+
+.file-transfer-list .status-badge {
+  background: var(--bg-input) !important;
+  color: var(--text-secondary) !important;
+}
+
+.file-transfer-list .status-connecting {
+  background: rgba(251, 191, 36, 0.2) !important;
+  color: #f59e0b !important;
+}
+
+.file-transfer-list .status-transferring {
+  background: rgba(59, 130, 246, 0.2) !important;
+  color: var(--accent-primary) !important;
+}
+
+.file-transfer-list .status-completed {
+  background: rgba(16, 185, 129, 0.2) !important;
+  color: var(--accent-secondary) !important;
+}
+
+.file-transfer-list .status-failed,
+.file-transfer-list .status-cancelled {
+  background: rgba(239, 68, 68, 0.2) !important;
+  color: #ef4444 !important;
+}
+
+.file-transfer-list .status-paused {
+  background: rgba(245, 158, 11, 0.2) !important;
+  color: #f59e0b !important;
+}
+
+.file-transfer-list .transfer-actions button {
+  color: var(--text-primary) !important;
+}
+
+.file-transfer-list .transfer-actions button:hover {
+  background: var(--bg-card-hover) !important;
+}
+
+.file-transfer-list .btn-danger {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+  color: white !important;
+}
+
+.file-transfer-list .btn-primary {
+  background: var(--bg-button-primary) !important;
+  color: var(--text-white) !important;
+}
+</style>
+
 <style scoped>
 .file-transfer-list {
   height: 100%;
   margin: 0;
-  background: white;
   border-radius: 0;
   padding: 20px;
   box-shadow: none;
