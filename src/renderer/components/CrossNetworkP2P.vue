@@ -1164,7 +1164,12 @@ const adaptiveAdjustReceiveBufferSize = (peerId: string): number => {
 
 // 设置数据通道
 const setupDataChannel = (dataChannel: RTCDataChannel, peerId: string) => {
-  // 初始化健康状态
+
+  if ((dataChannel as any).__setupDone) {
+    return;
+  }
+  (dataChannel as any).__setupDone = true;
+
   dataChannelHealth.set(peerId, {
     lastActivity: Date.now(),
     consecutiveErrors: 0,
@@ -1172,16 +1177,13 @@ const setupDataChannel = (dataChannel: RTCDataChannel, peerId: string) => {
     reconnectAttempts: 0
   });
   
-  // 初始化网络性能数据
   initNetworkPerformance(peerId);
 
   dataChannel.onopen = () => {
     addLog('success', `与 ${peerId} 的数据通道已建立`)
     updateConnectionStatus(peerId, 'connected')
-    // 将数据通道存储起来
     dataChannels.set(peerId, dataChannel)
     
-    // 更新健康状态
     const health = dataChannelHealth.get(peerId);
     if (health) {
       health.isHealthy = true;
@@ -1190,18 +1192,12 @@ const setupDataChannel = (dataChannel: RTCDataChannel, peerId: string) => {
       health.lastActivity = Date.now();
     }
     
-    // 启动定期调整缓冲区大小的任务
     startAdaptiveBufferSizeTask(peerId);
     
-    // 检查是否有待处理的传输请求
      const pendingTransferIndex = pendingTransfers.findIndex(transfer => transfer.peerId === peerId)
      if (pendingTransferIndex !== -1) {
        const pendingTransfer = pendingTransfers[pendingTransferIndex]
-       
-       // 开始传输，直接传递文件引用
        startFileTransfer(pendingTransfer.peerId, pendingTransfer.fileInfo, pendingTransfer.file)
-       
-       // 从待处理队列中移除
        pendingTransfers.splice(pendingTransferIndex, 1)
      }
   }
