@@ -475,9 +475,33 @@ const connectToSignalingServer = () => {
       addLog('success', `搜索完成，找到 ${results.length} 个匹配文件`)
     })
 
+    // ✅ 多源下载：监听所有节点返回
+    socket.on('download-nodes-found', (data) => {
+      const { fileHash, fileName, fileSize, nodes, nodeCount } = data
+      addLog('info', `找到文件 ${fileName} 的 ${nodeCount} 个下载节点`)
+      
+      // 优先使用多源下载
+      if (nodes && nodes.length > 1) {
+        addLog('success', `启用多源下载模式，从 ${nodes.length} 个节点并行下载`)
+        startMultiSourceDownload(fileHash, fileName, fileSize, nodes)
+      } else if (nodes && nodes.length === 1) {
+        // 单节点时使用原有方式
+        addLog('info', `只有1个节点可用，使用单源下载`)
+        connectToUser(nodes[0]).then(() => {
+          startFileDownload(fileHash, fileName, fileSize, nodes[0])
+        })
+      }
+    })
+
+    socket.on('download-nodes-not-found', (data) => {
+      const { fileHash, error } = data
+      addLog('error', `下载文件失败: ${error}`)
+    })
+
+    // 保留旧接口的兼容处理
     socket.on('download-node-found', (data) => {
       const { fileHash, fileName, fileSize, nodeId } = data
-      addLog('info', `找到文件 ${fileName} 的下载节点: ${nodeId.substring(0, 6)}`)
+      addLog('info', `找到文件 ${fileName} 的下载节点: ${nodeId.substring(0, 6)} (单源模式)`)
       
       // 连接到拥有文件的节点
       connectToUser(nodeId).then(() => {
@@ -1380,6 +1404,10 @@ const handleDataChannelMessage = (message: any, peerId: string) => {
       case 'download-request':
         handleDownloadRequest(data, peerId)
         break
+      case 'multi-source-download-request':
+        // ✅ 处理多源下载请求 - 只发送指定范围的块
+        handleMultiSourceDownloadRequest(data, peerId)
+        break
       case 'file-transfer-start':
         handleFileTransferStart(data, peerId)
         break
@@ -1570,6 +1598,240 @@ const handleDownloadRequest = async (data: any, peerId: string) => {
     addLog('error', `处理下载请求时出错: ${error}`)
   }
 }
+
+// ✅ 处理多源下载请求 - 只发送指定范围的块
+const handleMultiSourceDownloadRequest = async (data: any, peerId: string) => {
+  const { transferId, fileHash, fileName, fileSize, requestedChunks, chunkStart, chunkEnd } = data;
+  
+  addLog('info', `收到多源下载请求: ${fileName} (块 ${chunkStart}-${chunkEnd}, 共 ${requestedChunks?.length || 0} 块)`);
+  
+  try {
+    // 通过IPC调用查找文件
+    const fileInfo = await window.electronAPI.invoke(IPC_CHANNELS.P2P_FIND_FILE_BY_HASH, fileHash);
+    
+    if (!fileInfo) {
+      addLog('error', `未找到哈希为 ${fileHash} 的文件`);
+      return;
+    }
+    
+    addLog('info', `找到文件: ${fileInfo.filePath}, 准备发送指定块`);
+    
+    // 创建发送传输记录
+    const sendingTransfer = {
+      id: transferId,
+      peerId: peerId,
+      fileName: fileInfo.fileName,
+      fileSize: fileInfo.fileSize,
+      progress: 0,
+      status: 'preparing',
+      direction: 'send',
+      hash: fileHash,
+      isMultiSource: true,
+      requestedChunks: requestedChunks
+    };
+    transfers.value.push(sendingTransfer);
+    
+    // 只发送指定范围的块
+    await sendFileChunksForRange(
+      transferId,
+      peerId,
+      fileInfo.filePath,
+      fileInfo.fileName,
+      fileInfo.fileSize,
+      requestedChunks
+    );
+    
+  } catch (error) {
+    addLog('error', `处理多源下载请求时出错: ${error}`);
+  }
+}
+
+// ✅ 发送指定范围的文件块 - 改进版：大缓冲区读取，减少IPC调用
+const sendFileChunksForRange = async (
+  transferId: string,
+  peerId: string,
+  filePath: string,
+  fileName: string,
+  fileSize: number,
+  requestedChunks: number[]
+) => {
+  const CHUNK_SIZE = 65536;
+  const READ_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB读取缓冲区
+  const totalToSend = requestedChunks?.length || 0;
+  
+  let cleanPeerId = peerId;
+  if (cleanPeerId.includes('-ch')) {
+    cleanPeerId = cleanPeerId.split('-ch')[0];
+  } else if (cleanPeerId.includes('-incoming')) {
+    cleanPeerId = cleanPeerId.split('-incoming')[0];
+  }
+  
+  addLog('info', `开始发送指定块: ${fileName}, 块数: ${totalToSend}, peerId: ${cleanPeerId}`);
+  
+  let channels = multiDataChannels.get(cleanPeerId);
+  
+  if (!channels || channels.length === 0) {
+    const singleChannel = dataChannels.get(cleanPeerId);
+    if (singleChannel) {
+      channels = [singleChannel];
+    } else {
+      addLog('error', '没有可用的数据通道');
+      return;
+    }
+  }
+  
+  const availableChannels = channels.filter(ch => ch.readyState === 'open');
+  if (availableChannels.length === 0) {
+    addLog('error', '没有可用的数据通道');
+    return;
+  }
+  channels = availableChannels;
+  
+  addLog('info', `使用 ${channels.length} 个通道发送 ${totalToSend} 个块 (缓冲区: ${READ_BUFFER_SIZE/(1024*1024)}MB`);
+  
+  const transfer = transfers.value.find(t => t.id === transferId);
+  if (transfer) {
+    transfer.status = 'transferring';
+  }
+  
+  let sentCount = 0;
+  let failedCount = 0;
+  
+  // ✅ 关键改进：按块号排序，使用4MB大缓冲区读取
+  const sortedChunks = [...requestedChunks].sort((a, b) => a - b);
+  let bufferCache: Map<string, ArrayBuffer> = new Map();
+  
+  const getChunkData = async (chunkIndex: number): Promise<ArrayBuffer | null> => {
+    const start = (chunkIndex - 1) * CHUNK_SIZE;
+    const bufferStart = Math.floor(start / READ_BUFFER_SIZE) * READ_BUFFER_SIZE;
+    
+    const cacheKey = `${filePath}_${bufferStart}`;
+    
+    // 如果缓存存在，直接从缓存读取
+    if (bufferCache.has(cacheKey)) {
+      const bufferData = bufferCache.get(cacheKey)!;
+      const offsetInBuffer = start - bufferStart;
+      const endOffset = Math.min(offsetInBuffer + CHUNK_SIZE, bufferData.byteLength);
+      return bufferData.slice(offsetInBuffer, endOffset);
+    }
+    
+    // 读取4MB缓冲区
+    const readLength = Math.min(READ_BUFFER_SIZE, fileSize - bufferStart);
+    try {
+      const bufferData = await window.electronAPI.invoke('file:read-arraybuffer-range', {
+        filePath,
+        start: bufferStart,
+        length: readLength
+      });
+      
+      // 缓存新读取的数据
+      bufferCache.set(cacheKey, bufferData);
+      
+      // 保持最多4个缓存（约16MB内存）
+      if (bufferCache.size > 4) {
+        const firstKey = bufferCache.keys().next().value;
+        bufferCache.delete(firstKey);
+      }
+      
+      const offsetInBuffer = start - bufferStart;
+      const endOffset = Math.min(offsetInBuffer + CHUNK_SIZE, bufferData.byteLength);
+      return bufferData.slice(offsetInBuffer, endOffset);
+    } catch (e) {
+      addLog('error', `读取块 ${chunkIndex} 失败: ${e}`);
+      return null;
+    }
+  };
+  
+  for (let i = 0; i < sortedChunks.length; i++) {
+    const chunkIndex = sortedChunks[i];
+    
+    const chunk = await getChunkData(chunkIndex);
+    if (!chunk) {
+      failedCount++;
+      continue;
+    }
+    
+    const channelIndex = i % channels.length;
+    const channel = channels[channelIndex];
+    
+    if (!channel || channel.readyState !== 'open') {
+      failedCount++;
+      continue;
+    }
+    
+    // ✅ 更严格的缓冲区控制：发送前先检查
+    const MAX_BUFFER = 8 * 1024 * 1024; // 8MB
+    if (channel.bufferedAmount > MAX_BUFFER) {
+      await new Promise(resolve => {
+        const check = () => {
+          if (channel.bufferedAmount < MAX_BUFFER * 0.3) {
+            resolve(true);
+          } else {
+            setTimeout(check, 20);
+          }
+        };
+        check();
+      });
+    }
+    
+    try {
+      channel.send(JSON.stringify({
+        type: 'file-chunk-metadata',
+        transferId: transferId,
+        chunkIndex: chunkIndex,
+        totalChunks: Math.ceil(fileSize / CHUNK_SIZE),
+        chunkSize: chunk.byteLength,
+        channelIndex: channelIndex,
+        fileInfo: { name: fileName, size: fileSize }
+      }));
+      
+      channel.send(chunk);
+      sentCount++;
+    } catch (e) {
+      addLog('error', `发送块 ${chunkIndex} 失败: ${e}`);
+      failedCount++;
+    }
+    
+    if (transfer && (sentCount % 100 === 0 || sentCount === totalToSend)) {
+      transfer.progress = Math.round((sentCount / totalToSend) * 100);
+    }
+    
+    // 每200块短暂休息
+    if (i % 200 === 0 && i > 0) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+  
+  bufferCache.clear();
+  
+  await new Promise(resolve => {
+    const check = () => {
+      const allEmpty = channels.every(ch => ch.bufferedAmount === 0);
+      if (allEmpty) {
+        resolve(true);
+      } else {
+        setTimeout(check, 50);
+      }
+    };
+    check();
+  });
+  
+  channels[0].send(JSON.stringify({
+    type: 'file-transfer-complete',
+    transferId: transferId,
+    success: true,
+    isMultiSource: true,
+    sentChunks: sentCount,
+    failedChunks: failedCount
+  }));
+  
+  if (transfer) {
+    transfer.status = 'completed';
+    transfer.progress = 100;
+  }
+  
+  addLog('success', `多源块发送完成: 发送 ${sentCount} 个块, 失败 ${failedCount} 个`);
+};
 
 // 处理文件传输开始
 const handleFileTransferStart = (data: any, peerId: string) => {
@@ -1882,6 +2144,9 @@ const handleFileChunkBinary = async (binaryData: ArrayBuffer, metadata: any, pee
     // 标记该块已接收
     storage.receivedChunkIndexes.add(chunkIndex);
     
+    // ✅ 更新多源下载容错状态（如果是多源下载）
+    updateMultiSourceReceivedChunk(transferId, chunkIndex, peerId);
+    
     // 更新接收性能指标
     updateReceiveRate(peerId, storage.totalReceivedBytes + binaryData.byteLength);
     storage.totalReceivedBytes += binaryData.byteLength;
@@ -2071,7 +2336,380 @@ const handleFileTransferComplete = (data: any, peerId: string) => {
   }
 }
 
-// 文件下载功能
+// ✅ 多源下载状态存储 - 增强版（包含容错机制）
+interface MultiSourceState {
+  transferId: string;
+  fileHash: string;
+  fileName: string;
+  fileSize: number;
+  totalChunks: number;
+  sourceNodes: string[];
+  activeNodes: Set<string>;
+  failedNodes: Set<string>;
+  nodeAssignments: Map<string, number[]>;
+  pendingChunksPerNode: Map<string, Set<number>>;  // 每个节点待接收的块
+  receivedChunks: Set<number>;
+  status: 'connecting' | 'downloading' | 'completed' | 'failed';
+  startTime: number;
+  lastProgressTime: number;
+  recoveryAttempts: number;
+  maxRecoveryAttempts: number;
+}
+
+const multiSourceDownloads = new Map<string, MultiSourceState>();
+const MULTI_SOURCE_CHUNK_TIMEOUT = 30000; // 30秒无进度则触发重新分配
+
+// ✅ 块分配算法 - 将块分配给各个节点
+const assignChunksToNodes = (totalChunks: number, nodes: string[]): Map<string, number[]> => {
+  const assignments = new Map<string, number[]>();
+  
+  // 轮询分配：节点1负责块1, 节点2负责块2... 循环分配
+  const nodeChunks: number[][] = nodes.map(() => []);
+  
+  for (let chunk = 1; chunk <= totalChunks; chunk++) {
+    const nodeIndex = (chunk - 1) % nodes.length;
+    nodeChunks[nodeIndex].push(chunk);
+  }
+  
+  nodes.forEach((nodeId, index) => {
+    assignments.set(nodeId, nodeChunks[index]);
+  });
+  
+  return assignments;
+};
+
+// ✅ 重新分配失败节点的块到活跃节点
+const redistributeChunksForRecovery = async (
+  state: MultiSourceState,
+  failedNodeId: string
+): Promise<boolean> => {
+  const pendingChunks = state.pendingChunksPerNode.get(failedNodeId);
+  if (!pendingChunks || pendingChunks.size === 0) {
+    addLog('info', `节点 ${failedNodeId.substring(0, 6)} 没有待接收的块需要重新分配`);
+    return true;
+  }
+  
+  const chunksToRedistribute = Array.from(pendingChunks);
+  addLog('warning', `重新分配节点 ${failedNodeId.substring(0, 6)} 的 ${chunksToRedistribute.length} 个块`);
+  
+  // 获取活跃节点（排除失败节点）
+  const activeNodes = Array.from(state.activeNodes).filter(id => id !== failedNodeId);
+  
+  if (activeNodes.length === 0) {
+    addLog('error', `没有活跃节点，无法重新分配块`);
+    return false;
+  }
+  
+  // 将待分配的块重新分配给活跃节点
+  const newAssignments = assignChunksToNodesFromArray(chunksToRedistribute, activeNodes);
+  
+  for (const [nodeId, chunks] of newAssignments.entries()) {
+    if (chunks.length === 0) continue;
+    
+    const channel = dataChannels.get(nodeId);
+    if (!channel || channel.readyState !== 'open') {
+      addLog('warning', `节点 ${nodeId.substring(0, 6)} 不可用，跳过重新分配`);
+      continue;
+    }
+    
+    // 更新待接收块集合
+    const nodePending = state.pendingChunksPerNode.get(nodeId) || new Set<number>();
+    chunks.forEach(c => nodePending.add(c));
+    state.pendingChunksPerNode.set(nodeId, nodePending);
+    
+    addLog('info', `向节点 ${nodeId.substring(0, 6)} 追加请求 ${chunks.length} 个块`);
+    
+    // 发送追加的块请求
+    channel.send(JSON.stringify({
+      type: 'multi-source-download-request',
+      transferId: state.transferId,
+      fileHash: state.fileHash,
+      fileName: state.fileName,
+      fileSize: state.fileSize,
+      requestedChunks: chunks,
+      isRedistribution: true
+    }));
+  }
+  
+  // 清除失败节点的待接收块
+  pendingChunks.clear();
+  
+  return true;
+};
+
+// ✅ 从数组分配块到节点（用于重新分配）
+const assignChunksToNodesFromArray = (chunks: number[], nodes: string[]): Map<string, number[]> => {
+  const assignments = new Map<string, number[]>();
+  nodes.forEach(nodeId => assignments.set(nodeId, []));
+  
+  if (nodes.length === 0) return assignments;
+  
+  chunks.forEach((chunk, index) => {
+    const nodeIndex = index % nodes.length;
+    assignments.get(nodes[nodeIndex])!.push(chunk);
+  });
+  
+  return assignments;
+};
+
+// ✅ 检查多源下载进度并触发容错
+const checkMultiSourceProgress = async (transferId: string) => {
+  const state = multiSourceDownloads.get(transferId);
+  if (!state || state.status !== 'downloading') return;
+  
+  const now = Date.now();
+  const timeSinceLastProgress = now - state.lastProgressTime;
+  
+  // 检查是否超时且还有未完成的块
+  if (timeSinceLastProgress > MULTI_SOURCE_CHUNK_TIMEOUT && state.receivedChunks.size < state.totalChunks) {
+    addLog('warning', `检测到下载超时 (${Math.round(timeSinceLastProgress/1000)}s无进度)，尝试容错恢复`);
+    
+    if (state.recoveryAttempts >= state.maxRecoveryAttempts) {
+      addLog('error', `达到最大恢复次数 (${state.maxRecoveryAttempts})，下载失败`);
+      state.status = 'failed';
+      const transfer = transfers.value.find(t => t.id === transferId);
+      if (transfer) transfer.status = 'failed';
+      return;
+    }
+    
+    state.recoveryAttempts++;
+    
+    // 检查每个节点的连接状态
+    for (const nodeId of state.activeNodes) {
+      const channel = dataChannels.get(nodeId);
+      if (!channel || channel.readyState !== 'open') {
+        addLog('warning', `节点 ${nodeId.substring(0, 6)} 连接断开`);
+        state.activeNodes.delete(nodeId);
+        state.failedNodes.add(nodeId);
+        
+        // 重新分配该节点的待接收块
+        await redistributeChunksForRecovery(state, nodeId);
+      }
+    }
+    
+    // 如果还有活跃节点，继续等待
+    if (state.activeNodes.size > 0) {
+      state.lastProgressTime = now;
+    } else {
+      addLog('error', `所有节点都已断开，下载失败`);
+      state.status = 'failed';
+      const transfer = transfers.value.find(t => t.id === transferId);
+      if (transfer) transfer.status = 'failed';
+    }
+  }
+};
+
+// ✅ 启动多源下载进度监控
+const startProgressMonitor = (transferId: string) => {
+  const checkInterval = setInterval(() => {
+    const state = multiSourceDownloads.get(transferId);
+    if (!state || state.status === 'completed' || state.status === 'failed') {
+      clearInterval(checkInterval);
+      return;
+    }
+    checkMultiSourceProgress(transferId);
+  }, 5000); // 每5秒检查一次
+};
+
+// ✅ 多源下载核心函数 - 增强版
+const startMultiSourceDownload = async (
+  fileHash: string,
+  fileName: string,
+  fileSize: number,
+  sourceNodes: string[]
+) => {
+  const transferId = generateTransferId();
+  const CHUNK_SIZE = 65536;
+  const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+  
+  addLog('info', `开始多源下载: ${fileName} (${formatFileSize(fileSize)}, ${totalChunks} 块, ${sourceNodes.length} 节点)`);
+  
+  // 分配块到各节点
+  const nodeAssignments = assignChunksToNodes(totalChunks, sourceNodes);
+  
+  // 初始化待接收块集合
+  const pendingChunksPerNode = new Map<string, Set<number>>();
+  nodeAssignments.forEach((chunks, nodeId) => {
+    pendingChunksPerNode.set(nodeId, new Set(chunks));
+  });
+  
+  // 创建增强的多源下载状态
+  const multiSourceState: MultiSourceState = {
+    transferId: transferId,
+    fileHash: fileHash,
+    fileName: fileName,
+    fileSize: fileSize,
+    totalChunks: totalChunks,
+    sourceNodes: [...sourceNodes],
+    activeNodes: new Set(sourceNodes),
+    failedNodes: new Set<string>(),
+    nodeAssignments: nodeAssignments,
+    pendingChunksPerNode: pendingChunksPerNode,
+    receivedChunks: new Set<number>(),
+    status: 'connecting',
+    startTime: Date.now(),
+    lastProgressTime: Date.now(),
+    recoveryAttempts: 0,
+    maxRecoveryAttempts: 5
+  };
+  multiSourceDownloads.set(transferId, multiSourceState);
+  
+  // 创建传输记录
+  const transfer = {
+    id: transferId,
+    peerId: 'multi-source',
+    fileName: fileName,
+    fileSize: fileSize,
+    progress: 0,
+    status: 'connecting',
+    direction: 'receive',
+    hash: fileHash,
+    receivedChunks: 0,
+    totalChunks: totalChunks,
+    sourceNodeCount: sourceNodes.length,
+    activeNodeCount: sourceNodes.length
+  };
+  transfers.value.push(transfer);
+  
+  // 初始化接收文件块存储
+  initReceivedFileBlocks(transferId, { name: fileName, size: fileSize }, totalChunks);
+  
+  // 等待数据通道打开的辅助函数
+  const waitForDataChannelOpen = (nodeId: string, timeout: number = 15000): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      
+      const checkChannel = () => {
+        const dataChannel = dataChannels.get(nodeId);
+        if (dataChannel && dataChannel.readyState === 'open') {
+          resolve(true);
+        } else if (Date.now() - startTime >= timeout) {
+          resolve(false);
+        } else {
+          setTimeout(checkChannel, 100);
+        }
+      };
+      
+      checkChannel();
+    });
+  };
+  
+  // 并行连接所有节点
+  addLog('info', `正在连接 ${sourceNodes.length} 个源节点...`);
+  
+  const connectAndRequest = async (nodeId: string): Promise<boolean> => {
+    try {
+      addLog('info', `[${nodeId.substring(0, 6)}] 开始连接...`);
+      await connectToUser(nodeId);
+      
+      // ✅ 关键修复：等待数据通道打开，而不是立即检查
+      addLog('info', `[${nodeId.substring(0, 6)}] P2P连接成功，等待数据通道打开...`);
+      const channelReady = await waitForDataChannelOpen(nodeId, 15000);
+      
+      if (!channelReady) {
+        addLog('warning', `[${nodeId.substring(0, 6)}] 数据通道超时未打开`);
+        multiSourceState.activeNodes.delete(nodeId);
+        multiSourceState.failedNodes.add(nodeId);
+        return false;
+      }
+      
+      const dataChannel = dataChannels.get(nodeId);
+      if (dataChannel && dataChannel.readyState === 'open') {
+        const assignedChunks = nodeAssignments.get(nodeId) || [];
+        
+        addLog('info', `向节点 ${nodeId.substring(0, 6)} 请求 ${assignedChunks.length} 个块`);
+        
+        // 发送多源下载请求，指定需要的块范围
+        dataChannel.send(JSON.stringify({
+          type: 'multi-source-download-request',
+          transferId: transferId,
+          fileHash: fileHash,
+          fileName: fileName,
+          fileSize: fileSize,
+          chunkStart: Math.min(...assignedChunks),
+          chunkEnd: Math.max(...assignedChunks),
+          requestedChunks: assignedChunks
+        }));
+        
+        return true;
+      }
+      
+      multiSourceState.activeNodes.delete(nodeId);
+      multiSourceState.failedNodes.add(nodeId);
+      addLog('warning', `节点 ${nodeId.substring(0, 6)} 数据通道异常`);
+      return false;
+    } catch (error) {
+      multiSourceState.activeNodes.delete(nodeId);
+      multiSourceState.failedNodes.add(nodeId);
+      addLog('error', `连接节点 ${nodeId.substring(0, 6)} 失败: ${error}`);
+      return false;
+    }
+  };
+  
+  // 并行连接所有节点
+  const connectResults = await Promise.all(sourceNodes.map(nodeId => connectAndRequest(nodeId)));
+  const successCount = connectResults.filter(r => r).length;
+  
+  if (successCount === 0) {
+    addLog('error', `无法连接任何源节点，下载失败`);
+    transfer.status = 'failed';
+    multiSourceState.status = 'failed';
+    return;
+  }
+  
+  // 如果有节点连接失败，立即重新分配其块
+  if (successCount < sourceNodes.length) {
+    addLog('warning', `${sourceNodes.length - successCount} 个节点连接失败，尝试重新分配其块`);
+    for (const failedNode of multiSourceState.failedNodes) {
+      await redistributeChunksForRecovery(multiSourceState, failedNode);
+    }
+  }
+  
+  // 更新传输状态
+  transfer.status = 'transferring';
+  transfer.activeNodeCount = multiSourceState.activeNodes.size;
+  multiSourceState.status = 'downloading';
+  
+  // 启动进度监控
+  startProgressMonitor(transferId);
+  
+  addLog('success', `多源下载已启动 (${successCount}/${sourceNodes.length} 节点活跃)，等待数据块...`);
+};
+
+// ✅ 更新多源下载的块接收处理 - 集成容错
+const updateMultiSourceReceivedChunk = (transferId: string, chunkIndex: number, peerId: string) => {
+  const state = multiSourceDownloads.get(transferId);
+  if (!state) return;
+  
+  // 标记块已接收
+  state.receivedChunks.add(chunkIndex);
+  
+  // 从节点待接收集合中移除
+  const nodePending = state.pendingChunksPerNode.get(peerId);
+  if (nodePending) {
+    nodePending.delete(chunkIndex);
+  }
+  
+  // 更新最后进度时间
+  state.lastProgressTime = Date.now();
+  
+  // 更新UI传输记录
+  const transfer = transfers.value.find(t => t.id === transferId);
+  if (transfer) {
+    transfer.receivedChunks = state.receivedChunks.size;
+    transfer.activeNodeCount = state.activeNodes.size;
+    transfer.progress = Math.round((state.receivedChunks.size / state.totalChunks) * 100);
+  }
+  
+  // 检查是否完成
+  if (state.receivedChunks.size >= state.totalChunks) {
+    state.status = 'completed';
+    addLog('success', `多源下载完成！接收了 ${state.receivedChunks.size}/${state.totalChunks} 个块`);
+    multiSourceDownloads.delete(transferId);
+  }
+};
+
+// 文件下载功能（单源下载）
 const startFileDownload = async (fileHash: string, fileName: string, fileSize: number, targetUserId: string) => {
   // 创建下载传输记录
   const transferId = generateTransferId()

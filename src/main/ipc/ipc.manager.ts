@@ -200,6 +200,13 @@ export class IpcManager {
         });
         
         this.registerHandler({
+          channel: 'file:read-arraybuffer-range',
+          handler: (event: IpcMainInvokeEvent, params: { filePath: string, start: number, length: number }): Promise<any> => {
+            return this.fileHandler.readArrayBufferRange(event, params);
+          },
+        });
+        
+        this.registerHandler({
           channel: IPC_CHANNELS.FILE_DELETE_FILE,
           handler: (event: IpcMainInvokeEvent, params: { filePath: string }): Promise<any> => {
             return this.fileHandler.deleteFile(event, params);

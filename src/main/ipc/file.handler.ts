@@ -131,6 +131,38 @@ export class FileHandler extends BaseIpcHandler {
     });
   }
   
+  // ✅ 按范围读取文件 - 用于多源下载的流式传输
+  async readArrayBufferRange(event: IpcMainInvokeEvent, params: { filePath: string, start: number, length: number }): Promise<ArrayBuffer> {
+    return this.handleAsync<ArrayBuffer>(async () => {
+      const { filePath, start, length } = params;
+      
+      // 打开文件句柄
+      const fileHandle = await fs.open(filePath, 'r');
+      
+      try {
+        // 分配缓冲区
+        const buffer = Buffer.alloc(length);
+        
+        // 读取指定范围的数据
+        const result = await fileHandle.read(buffer, 0, length, start);
+        
+        // 返回实际读取的部分
+        if (result.bytesRead < length) {
+          return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + result.bytesRead);
+        }
+        
+        return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + length);
+      } finally {
+        await fileHandle.close();
+      }
+    }).then(response => {
+      if (!response.success) {
+        throw new Error(response.error!);
+      }
+      return response.data!;
+    });
+  }
+  
   async deleteFile(event: IpcMainInvokeEvent, params: { filePath: string }): Promise<void> {
     return this.handleAsync<void>(async () => {
       const { filePath } = params;

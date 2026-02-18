@@ -122,7 +122,7 @@ io.on('connection', (socket) => {
     console.log(`搜索结果: 找到 ${results.length} 个匹配文件`);
   });
 
-  // 请求下载文件（获取拥有该文件的节点信息）
+  // 请求下载文件（获取拥有该文件的所有节点信息 - 支持多源下载）
   socket.on('request-download', (fileHash) => {
     console.log(`用户 ${socket.id} 请求下载文件:`, fileHash);
     
@@ -135,25 +135,24 @@ io.on('connection', (socket) => {
       );
       
       if (activeNodes.length > 0) {
-        // 随机选择一个节点进行下载（可以扩展为负载均衡算法）
-        const selectedNode = activeNodes[Math.floor(Math.random() * activeNodes.length)];
-        
-        socket.emit('download-node-found', {
+        // ✅ 只返回多源下载事件，不再发送旧的单源事件
+        socket.emit('download-nodes-found', {
           fileHash: fileHash,
           fileName: fileInfo.fileName,
           fileSize: fileInfo.fileSize,
-          nodeId: selectedNode
+          nodes: activeNodes,
+          nodeCount: activeNodes.length
         });
         
-        console.log(`为用户 ${socket.id} 找到文件 ${fileHash} 的下载节点: ${selectedNode}`);
+        console.log(`为用户 ${socket.id} 找到文件 ${fileHash} 的 ${activeNodes.length} 个下载节点:`, activeNodes);
       } else {
-        socket.emit('download-node-not-found', {
+        socket.emit('download-nodes-not-found', {
           fileHash: fileHash,
           error: '没有节点拥有该文件'
         });
       }
     } else {
-      socket.emit('download-node-not-found', {
+      socket.emit('download-nodes-not-found', {
         fileHash: fileHash,
         error: '文件未在索引中找到'
       });
