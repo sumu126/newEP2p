@@ -1,7 +1,7 @@
 {
   "name": "EP2P",
-  "version": "1.0.0",
-  "description": "一个基于Electron和Vue3的跨网络P2P文件传输应用",
+  "version": "0.0.1",
+  "description": "一个基于Electron和Vue3的多节点跨网络P2P文件传输应用",
   "main": "dist-electron/main.cjs",
   "author": "sumu126",
   "scripts": {
