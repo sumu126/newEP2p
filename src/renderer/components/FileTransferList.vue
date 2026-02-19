@@ -45,7 +45,7 @@
             {{ getStatusText(transfer.status) }}
           </span>
           <button 
-            v-if="transfer.status === 'transferring' || transfer.status === 'pending'"
+            v-if="transfer.status === 'transferring' || transfer.status === 'pending' || transfer.status === 'connecting'"
             @click="cancelTransfer(transfer.id)"
             class="cancel-btn"
           >
@@ -224,7 +224,8 @@ const formatTime = (date: Date): string => {
 
 const getStatusText = (status: string): string => {
   const statusMap = {
-    pending: '等待中',
+    pending: '搜索源中',
+    connecting: '连接中',
     transferring: '传输中',
     completed: '已完成',
     error: '错误',

@@ -480,21 +480,39 @@ const connectToSignalingServer = () => {
       const { fileHash, fileName, fileSize, nodes, nodeCount } = data
       addLog('info', `找到文件 ${fileName} 的 ${nodeCount} 个下载节点`)
       
+      // 查找之前创建的 pending 传输记录
+      const pendingTransfer = transfers.value.find(
+        t => t.hash === fileHash && t.status === 'pending' && t.isFromSearch
+      )
+      
       // 优先使用多源下载
       if (nodes && nodes.length > 1) {
         addLog('success', `启用多源下载模式，从 ${nodes.length} 个节点并行下载`)
-        startMultiSourceDownload(fileHash, fileName, fileSize, nodes)
+        startMultiSourceDownload(fileHash, fileName, fileSize, nodes, pendingTransfer?.id)
       } else if (nodes && nodes.length === 1) {
         // 单节点时使用原有方式
         addLog('info', `只有1个节点可用，使用单源下载`)
         connectToUser(nodes[0]).then(() => {
-          startFileDownload(fileHash, fileName, fileSize, nodes[0])
+          startFileDownload(fileHash, fileName, fileSize, nodes[0], pendingTransfer?.id)
         })
       }
     })
 
     socket.on('download-nodes-not-found', (data) => {
       const { fileHash, error } = data
+      
+      // 查找之前创建的 pending 传输记录并更新状态
+      const pendingTransfer = transfers.value.find(
+        t => t.hash === fileHash && t.status === 'pending' && t.isFromSearch
+      )
+      
+      if (pendingTransfer) {
+        pendingTransfer.status = 'error'
+        window.dispatchEvent(new CustomEvent('p2p:transfer-error', {
+          detail: { fileId: pendingTransfer.id, error }
+        }))
+      }
+      
       addLog('error', `下载文件失败: ${error}`)
     })
 
@@ -503,15 +521,33 @@ const connectToSignalingServer = () => {
       const { fileHash, fileName, fileSize, nodeId } = data
       addLog('info', `找到文件 ${fileName} 的下载节点: ${nodeId.substring(0, 6)} (单源模式)`)
       
+      // 查找之前创建的 pending 传输记录
+      const pendingTransfer = transfers.value.find(
+        t => t.hash === fileHash && t.status === 'pending' && t.isFromSearch
+      )
+      
       // 连接到拥有文件的节点
       connectToUser(nodeId).then(() => {
         // 开始文件传输
-        startFileDownload(fileHash, fileName, fileSize, nodeId)
+        startFileDownload(fileHash, fileName, fileSize, nodeId, pendingTransfer?.id)
       })
     })
 
     socket.on('download-node-not-found', (data) => {
       const { fileHash, error } = data
+      
+      // 查找之前创建的 pending 传输记录并更新状态
+      const pendingTransfer = transfers.value.find(
+        t => t.hash === fileHash && t.status === 'pending' && t.isFromSearch
+      )
+      
+      if (pendingTransfer) {
+        pendingTransfer.status = 'error'
+        window.dispatchEvent(new CustomEvent('p2p:transfer-error', {
+          detail: { fileId: pendingTransfer.id, error }
+        }))
+      }
+      
       addLog('error', `下载文件失败: ${error}`)
     })
 
@@ -713,9 +749,44 @@ const downloadFile = (result: any) => {
     return
   }
   
+  // 检查是否已有相同文件的下载任务（防止重复点击）
+  const existingTransfer = transfers.value.find(
+    t => t.hash === result.hash && (t.status === 'pending' || t.status === 'connecting' || t.status === 'transferring')
+  )
+  
+  if (existingTransfer) {
+    addLog('warning', `文件 ${result.fileName} 已在下载队列中，请勿重复点击`)
+    return
+  }
+  
+  // 立即创建传输记录，显示在传输列表中
+  const transferId = generateTransferId()
+  const transfer = {
+    id: transferId,
+    peerId: 'searching',
+    fileName: result.fileName,
+    fileSize: result.fileSize,
+    progress: 0,
+    status: 'pending',
+    direction: 'receive',
+    hash: result.hash,
+    receivedChunks: 0,
+    totalChunks: 0,
+    sourceNodeCount: 0,
+    activeNodeCount: 0,
+    isFromSearch: true
+  }
+  transfers.value.push(transfer)
+  
+  // 触发传输进度事件，让 FileTransferList 立即显示
+  window.dispatchEvent(new CustomEvent('p2p:transfer-progress', {
+    detail: { ...transfer }
+  }))
+  
+  addLog('info', `开始搜索文件 ${result.fileName} 的下载源...`)
+  
   // 请求下载文件的节点信息
   socket.emit('request-download', result.hash)
-  addLog('info', `请求下载文件: ${result.fileName}`)
 }
 
 // 连接到用户
@@ -2512,9 +2583,9 @@ const startMultiSourceDownload = async (
   fileHash: string,
   fileName: string,
   fileSize: number,
-  sourceNodes: string[]
+  sourceNodes: string[],
+  existingTransferId?: string
 ) => {
-  const transferId = generateTransferId();
   const CHUNK_SIZE = 65536;
   const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
   
@@ -2529,9 +2600,46 @@ const startMultiSourceDownload = async (
     pendingChunksPerNode.set(nodeId, new Set(chunks));
   });
   
+  // 如果有之前的传输记录，复用它
+  let transferId = existingTransferId;
+  let transfer: any;
+  
+  if (transferId) {
+    // 查找并更新已有的传输记录
+    transfer = transfers.value.find(t => t.id === transferId);
+    if (transfer) {
+      // 更新传输记录
+      transfer.peerId = 'multi-source';
+      transfer.status = 'connecting';
+      transfer.totalChunks = totalChunks;
+      transfer.sourceNodeCount = sourceNodes.length;
+      transfer.activeNodeCount = sourceNodes.length;
+    }
+  }
+  
+  // 如果没有找到或没有传入，创建新的传输ID
+  if (!transfer) {
+    transferId = generateTransferId();
+    transfer = {
+      id: transferId,
+      peerId: 'multi-source',
+      fileName: fileName,
+      fileSize: fileSize,
+      progress: 0,
+      status: 'connecting',
+      direction: 'receive',
+      hash: fileHash,
+      receivedChunks: 0,
+      totalChunks: totalChunks,
+      sourceNodeCount: sourceNodes.length,
+      activeNodeCount: sourceNodes.length
+    };
+    transfers.value.push(transfer);
+  }
+  
   // 创建增强的多源下载状态
   const multiSourceState: MultiSourceState = {
-    transferId: transferId,
+    transferId: transferId!,
     fileHash: fileHash,
     fileName: fileName,
     fileSize: fileSize,
@@ -2548,27 +2656,10 @@ const startMultiSourceDownload = async (
     recoveryAttempts: 0,
     maxRecoveryAttempts: 5
   };
-  multiSourceDownloads.set(transferId, multiSourceState);
-  
-  // 创建传输记录
-  const transfer = {
-    id: transferId,
-    peerId: 'multi-source',
-    fileName: fileName,
-    fileSize: fileSize,
-    progress: 0,
-    status: 'connecting',
-    direction: 'receive',
-    hash: fileHash,
-    receivedChunks: 0,
-    totalChunks: totalChunks,
-    sourceNodeCount: sourceNodes.length,
-    activeNodeCount: sourceNodes.length
-  };
-  transfers.value.push(transfer);
+  multiSourceDownloads.set(transferId!, multiSourceState);
   
   // 初始化接收文件块存储
-  initReceivedFileBlocks(transferId, { name: fileName, size: fileSize }, totalChunks);
+  initReceivedFileBlocks(transferId!, { name: fileName, size: fileSize }, totalChunks);
   
   // 等待数据通道打开的辅助函数
   const waitForDataChannelOpen = (nodeId: string, timeout: number = 15000): Promise<boolean> => {
@@ -2706,20 +2797,35 @@ const updateMultiSourceReceivedChunk = (transferId: string, chunkIndex: number, 
 };
 
 // 文件下载功能（单源下载）
-const startFileDownload = async (fileHash: string, fileName: string, fileSize: number, targetUserId: string) => {
-  // 创建下载传输记录
-  const transferId = generateTransferId()
-  const transfer = {
-    id: transferId,
-    peerId: targetUserId,
-    fileName: fileName,
-    fileSize: fileSize,
-    progress: 0,
-    status: 'connecting',
-    direction: 'receive',
-    hash: fileHash  // 添加文件哈希信息
+const startFileDownload = async (fileHash: string, fileName: string, fileSize: number, targetUserId: string, existingTransferId?: string) => {
+  let transferId = existingTransferId;
+  let transfer: any;
+  
+  if (transferId) {
+    // 查找并更新已有的传输记录
+    transfer = transfers.value.find(t => t.id === transferId);
+    if (transfer) {
+      transfer.peerId = targetUserId;
+      transfer.status = 'connecting';
+      transfer.hash = fileHash;
+    }
   }
-  transfers.value.push(transfer)
+  
+  // 如果没有找到或没有传入，创建新的传输记录
+  if (!transfer) {
+    transferId = generateTransferId();
+    transfer = {
+      id: transferId,
+      peerId: targetUserId,
+      fileName: fileName,
+      fileSize: fileSize,
+      progress: 0,
+      status: 'connecting',
+      direction: 'receive',
+      hash: fileHash
+    };
+    transfers.value.push(transfer);
+  }
   
   // 发送下载请求
   const waitForDataChannel = (targetId: string, timeout: number = 10000): Promise<boolean> => {
