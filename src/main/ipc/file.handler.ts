@@ -1,5 +1,6 @@
 import { IpcMainInvokeEvent, BrowserWindow } from 'electron';
 import fs from 'fs/promises';
+import { createReadStream, createWriteStream } from 'fs';
 import path from 'path';
 import { BaseIpcHandler } from '../ipc/base.handler';
 import { IPC_CHANNELS } from '@shared/constants';
@@ -303,5 +304,105 @@ export class FileHandler extends BaseIpcHandler {
     });
   }
   
+  // ✅ 流式合并切片文件（避免内存溢出）
+  // 按顺序读取切片文件并流式写入到最终文件
+  async mergeSliceFiles(event: IpcMainInvokeEvent, params: { 
+    slicesDir: string,       // 切片文件所在目录
+    outputPath: string,      // 输出文件路径
+    totalSlices: number,     // 切片总数
+    slicePrefix?: string,    // 切片文件名前缀，默认 'slice_'
+    sliceSuffix?: string,    // 切片文件名后缀，默认 '.bin'
+    deleteSlices?: boolean   // 合并完成后是否删除切片，默认 true
+  }): Promise<{ success: boolean; filePath: string; error?: string }> {
+    return this.handleAsync<{ success: boolean; filePath: string; error?: string }>(async () => {
+      const { 
+        slicesDir, 
+        outputPath, 
+        totalSlices, 
+        slicePrefix = 'slice_', 
+        sliceSuffix = '.bin',
+        deleteSlices = true 
+      } = params;
+      
+      console.log(`开始合并切片文件: ${slicesDir} -> ${outputPath}, 总数: ${totalSlices}`);
+      
+      // 确保输出目录存在
+      const outputDir = path.dirname(outputPath);
+      await fs.mkdir(outputDir, { recursive: true });
+      
+      // 创建写入流
+      const writeStream = createWriteStream(outputPath);
+      
+      // 使用 Promise 包装流式写入
+      await new Promise<void>((resolve, reject) => {
+        let currentSlice = 1;
+        
+        const writeNextSlice = () => {
+          if (currentSlice > totalSlices) {
+            // 所有切片都已写入
+            writeStream.end();
+            return;
+          }
+          
+          // 构造切片文件名（如 slice_00001.bin）
+          const sliceFileName = `${slicePrefix}${String(currentSlice).padStart(5, '0')}${sliceSuffix}`;
+          const sliceFilePath = path.join(slicesDir, sliceFileName);
+          
+          // 检查文件是否存在
+          fs.access(sliceFilePath).then(() => {
+            // 创建读取流
+            const readStream = createReadStream(sliceFilePath);
+            
+            // 管道写入，但不关闭写入流
+            readStream.pipe(writeStream, { end: false });
+            
+            readStream.on('end', () => {
+              readStream.destroy(); // 销毁读取流
+              
+              // 删除已处理的切片文件（可选）
+              const deletePromise = deleteSlices ? fs.unlink(sliceFilePath).catch(e => console.warn(`删除切片失败: ${sliceFilePath}`, e)) : Promise.resolve();
+              
+              deletePromise.then(() => {
+                currentSlice++;
+                // 延迟一点继续下一个，避免同步阻塞
+                setImmediate(writeNextSlice);
+              });
+            });
+            
+            readStream.on('error', (err) => {
+              console.error(`读取切片失败: ${sliceFilePath}`, err);
+              writeStream.destroy();
+              reject(err);
+            });
+            
+          }).catch((err) => {
+            console.error(`切片文件不存在: ${sliceFilePath}`, err);
+            writeStream.destroy();
+            reject(new Error(`切片文件不存在: ${sliceFilePath}`));
+          });
+        };
+        
+        writeStream.on('finish', () => {
+          console.log(`文件合并完成: ${outputPath}`);
+          resolve();
+        });
+        
+        writeStream.on('error', (err) => {
+          console.error(`写入失败: ${outputPath}`, err);
+          reject(err);
+        });
+        
+        // 开始写入
+        writeNextSlice();
+      });
+      
+      return { success: true, filePath: outputPath };
+    }).then(response => {
+      if (!response.success) {
+        throw new Error(response.error!);
+      }
+      return response.data!;
+    });
+  }
 
 }

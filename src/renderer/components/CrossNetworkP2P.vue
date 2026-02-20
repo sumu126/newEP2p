@@ -2253,53 +2253,26 @@ const finalizeReceivedFile = async (transferId: string, fileInfo: any, totalChun
     // 从切片文件组装完整文件
     const fileNameWithoutExt = storage.fileInfo?.name?.replace(/\.[^/.]+$/, "") || 'unknown_file';
     const fileExtension = storage.fileInfo?.name?.match(/\.[^/.]+$/)?.[0] || '';
-    // 将最终文件保存在同一目录下，而不是上级目录
+    // 将最终文件保存在下载目录中（与切片目录同级）
     const finalFilePath = `${storage.downloadFolderPath}/${storage.fileInfo.name}`;
+    const slicesDir = storage.downloadFolderPath;
     
-    // 按顺序读取所有切片并组合成完整文件
-    const allSliceData: ArrayBuffer[] = [];
+    addLog('info', `开始合并文件: ${storage.fileInfo?.name}, 切片数: ${totalChunks}`);
+    addLog('info', `切片目录: ${slicesDir}`);
+    addLog('info', `输出文件: ${finalFilePath}`);
     
-    for (let i = 1; i <= storage.expectedTotalChunks; i++) {
-      const sliceFileName = `slice_${String(i).padStart(5, '0')}.bin`;
-      const sliceFilePath = `${storage.downloadFolderPath}/${sliceFileName}`;
-      
-      // 读取切片文件
-      const sliceData: ArrayBuffer = await window.electronAPI.invoke('file:read-arraybuffer', {
-        filePath: sliceFilePath
-      });
-      
-      allSliceData.push(sliceData);
-    }
-    
-    // 组合所有切片数据
-    const totalSize = allSliceData.reduce((acc, slice) => acc + slice.byteLength, 0);
-    const combinedData = new Uint8Array(totalSize);
-    let offset = 0;
-    
-    for (const sliceData of allSliceData) {
-      combinedData.set(new Uint8Array(sliceData), offset);
-      offset += sliceData.byteLength;
-    }
-    
-    // 写入最终的完整文件
-    await window.electronAPI.invoke('file:save-arraybuffer-as-file', {
-      filePath: finalFilePath,
-      arrayBufferData: combinedData.buffer
+    // ✅ 使用主进程的流式合并功能（避免内存溢出）
+    const mergeResult = await window.electronAPI.invoke('file:merge-slices', {
+      slicesDir: slicesDir,
+      outputPath: finalFilePath,
+      totalSlices: totalChunks,
+      slicePrefix: 'slice_',
+      sliceSuffix: '.bin',
+      deleteSlices: true
     });
     
-    // 清理切片文件（可选，根据需要保留或删除）
-    // 这里可以选择删除切片文件以节省空间
-    for (let i = 1; i <= storage.expectedTotalChunks; i++) {
-      const sliceFileName = `slice_${String(i).padStart(5, '0')}.bin`;
-      const sliceFilePath = `${storage.downloadFolderPath}/${sliceFileName}`;
-      
-      try {
-        await window.electronAPI.invoke('file:delete-file', {
-          filePath: sliceFilePath
-        });
-      } catch (err) {
-        addLog('warning', `删除切片文件失败: ${sliceFilePath}`);
-      }
+    if (!mergeResult.success) {
+      throw new Error(mergeResult.error || '文件合并失败');
     }
     
     // 清理存储
@@ -2310,7 +2283,7 @@ const finalizeReceivedFile = async (transferId: string, fileInfo: any, totalChun
     if (transfer) {
       transfer.status = 'completed';
       transfer.progress = 100;
-      transfer.filePath = finalFilePath; // 使用最终文件路径
+      transfer.filePath = finalFilePath;
       
       // 触发传输完成事件，供FileTransferList组件使用
       window.dispatchEvent(new CustomEvent('p2p:transfer-complete', {

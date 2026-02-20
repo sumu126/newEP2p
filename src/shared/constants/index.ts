@@ -58,6 +58,7 @@ export const IPC_CHANNELS = {
         FILE_CREATE_DIRECTORY: 'file:create-directory',
         FILE_READ_ARRAYBUFFER: 'file:read-arraybuffer',
         FILE_DELETE_FILE: 'file:delete-file',
+        FILE_MERGE_SLICES: 'file:merge-slices',  // ✅ 流式合并切片文件
   
   // 系统信息通道
   SYSTEM_INFO: 'system:info',

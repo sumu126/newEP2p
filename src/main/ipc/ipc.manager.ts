@@ -212,6 +212,20 @@ export class IpcManager {
             return this.fileHandler.deleteFile(event, params);
           },
         });
+        
+        this.registerHandler({
+          channel: IPC_CHANNELS.FILE_MERGE_SLICES,
+          handler: (event: IpcMainInvokeEvent, params: {
+            slicesDir: string;
+            outputPath: string;
+            totalSlices: number;
+            slicePrefix?: string;
+            sliceSuffix?: string;
+            deleteSlices?: boolean;
+          }): Promise<any> => {
+            return this.fileHandler.mergeSliceFiles(event, params);
+          },
+        });
     
 
     
