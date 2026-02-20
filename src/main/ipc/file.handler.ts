@@ -210,17 +210,19 @@ export class FileHandler extends BaseIpcHandler {
     return this.handleAsync<{ handleId: string }>(async () => {
       const { filePath, totalSize } = params;
       
-      // 确保目录存在
       const dir = path.dirname(filePath);
       await fs.mkdir(dir, { recursive: true });
       
-      // 创建空文件并设置大小（预分配空间）
-      await fs.truncate(filePath, totalSize);
+      const fileHandle = await fs.open(filePath, 'w+');
       
-      // 打开文件进行写入
-      const fileHandle = await fs.open(filePath, 'r+');
+      if (totalSize > 0) {
+        try {
+          await fileHandle.truncate(totalSize);
+        } catch (e) {
+          console.warn(`预分配空间失败，继续创建文件: ${e}`);
+        }
+      }
       
-      // 生成唯一的句柄ID
       const handleId = `fh_${++this.handleCounter}`;
       this.fileHandles.set(handleId, fileHandle);
       

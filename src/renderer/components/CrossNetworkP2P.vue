@@ -1901,15 +1901,16 @@ const sendFileChunksForRange = async (
 };
 
 // 处理文件传输开始
-const handleFileTransferStart = (data: any, peerId: string) => {
-  const { transferId, fileInfo } = data
+const handleFileTransferStart = async (data: any, peerId: string) => {
+  const { transferId, fileInfo, totalChunks } = data
   addLog('info', `收到文件传输开始信号: ${fileInfo.name}`)
   
-  // 在新的分布式搜索下载模式下，所有传输都是主动发起的，直接接受
-  // 初始化接收文件块存储
-  initReceivedFileBlocks(transferId, fileInfo, data.totalChunks);
+  initReceivedFileBlocks(transferId, fileInfo, totalChunks);
   
-  // 直接接受文件传输
+  if (fileInfo && fileInfo.size) {
+    await initFinalFile(transferId, fileInfo, totalChunks, fileInfo.size);
+  }
+  
   acceptFileTransfer();
   
   addLog('info', `自动接受来自 ${peerId.substring(0, 6)} 的下载文件: ${fileInfo.name}`)
@@ -2018,39 +2019,81 @@ const pendingChunks = new Map();
 // 存储接收到的文件块信息 - 按要求实现切片下载和组装
 const receivedFileBlocks = new Map<string, {
   metadata: any[],
-  binaryData: (ArrayBuffer | null)[], // 存储接收到的块数据，null表示未接收
-  receivedChunkIndexes: Set<number>, // 新增：快速检查块是否已接收
+  receivedChunkIndexes: Set<number>,
   totalReceivedBytes: number,
-  fileInfo: any, // 存储文件信息
-  downloadFolderPath: string, // 下载文件夹路径
-  expectedTotalChunks: number, // 预期总块数
-  isInitialized: boolean // 是否已初始化
+  fileInfo: any,
+  finalFilePath: string,
+  fileHandleId: string | null,
+  expectedTotalChunks: number,
+  isInitialized: boolean,
+  chunkSize: number
 }>()
+
+const CHUNK_SIZE = 65536;
 
 // 初始化接收文件块存储
 const initReceivedFileBlocks = (transferId: string, fileInfo?: any, expectedTotalChunks?: number) => {
   if (!receivedFileBlocks.has(transferId)) {
     receivedFileBlocks.set(transferId, {
       metadata: [],
-      binaryData: [], // 初始化为空数组
-      receivedChunkIndexes: new Set<number>(), // 初始化已接收块索引集合
+      receivedChunkIndexes: new Set<number>(),
       totalReceivedBytes: 0,
       fileInfo: fileInfo || null,
-      downloadFolderPath: '',
+      finalFilePath: '',
+      fileHandleId: null,
       expectedTotalChunks: expectedTotalChunks || 0,
-      isInitialized: false
+      isInitialized: false,
+      chunkSize: CHUNK_SIZE
     });
   }
 }
+
+const initFinalFile = async (transferId: string, fileInfo: any, totalChunks: number, totalSize: number) => {
+  const storage = receivedFileBlocks.get(transferId);
+  if (!storage || storage.isInitialized) return;
+  
+  let downloadPath = await getDefaultDownloadPath();
+  if (!downloadPath || downloadPath.trim() === '') {
+    try {
+      const systemInfo = await window.electronAPI.invoke('system:info');
+      downloadPath = systemInfo.userInfo.homeDir + '/Downloads/P2PFiles';
+    } catch (error) {
+      addLog('error', `获取下载路径失败: ${error}`);
+      throw new Error('无法确定有效的下载路径');
+    }
+  }
+  
+  const fileNameWithoutExt = fileInfo.name.replace(/\.[^/.]+$/, "") || 'unknown_file';
+  const fileExtension = fileInfo.name.match(/\.[^/.]+$/)?.[0] || '';
+  
+  const normalizedDownloadPath = downloadPath.replace(/[\\\/]/g, '/');
+  const downloadFolderPath = `${normalizedDownloadPath}/${fileNameWithoutExt}_download`;
+  const finalFilePath = `${downloadFolderPath}/${fileInfo.name}`;
+  
+  await window.electronAPI.invoke('file:create-directory', {
+    dirPath: downloadFolderPath
+  });
+  
+  const handleResult = await window.electronAPI.invoke('file:create-handle', {
+    filePath: finalFilePath,
+    totalSize: totalSize
+  });
+  
+  storage.finalFilePath = finalFilePath;
+  storage.fileHandleId = handleResult.handleId;
+  storage.fileInfo = fileInfo;
+  storage.expectedTotalChunks = totalChunks;
+  storage.isInitialized = true;
+  
+  addLog('info', `预创建文件: ${finalFilePath}, 句柄ID: ${handleResult.handleId}`);
+};
 
 // 处理文件块元数据 - 实现批量流式传输
 const handleFileChunkMetadata = async (data: any, peerId: string) => {
   const { transferId, chunkIndex, totalChunks, chunkSize, fileInfo } = data
   
-  // 初始化传输记录（如果尚未存在）
   let transfer = transfers.value.find(t => t.id === transferId)
   if (!transfer) {
-    // 如果没找到传输记录，尝试使用fallback方法查找
     transfer = transfers.value.find(t => 
       t.fileName === fileInfo?.name && 
       t.fileSize === fileInfo?.size &&
@@ -2058,9 +2101,8 @@ const handleFileChunkMetadata = async (data: any, peerId: string) => {
     );
     
     if (transfer) {
-      transfer.id = transferId; // 更新ID以便后续追踪
+      transfer.id = transferId;
     } else {
-      // 如果仍然找不到，创建一个新的传输记录
       transfer = {
         id: transferId,
         fileName: fileInfo?.name || 'unknown',
@@ -2076,63 +2118,15 @@ const handleFileChunkMetadata = async (data: any, peerId: string) => {
     }
   }
   
-  // 初始化此传输的接收块存储（如果尚未初始化）
   if (!receivedFileBlocks.has(transferId)) {
     initReceivedFileBlocks(transferId, fileInfo, totalChunks);
-    
-    // 初始化下载文件夹
-    const storage = receivedFileBlocks.get(transferId)!;
-    let downloadPath = await getDefaultDownloadPath();
-    
-    // 确保下载路径不为空
-    if (!downloadPath || downloadPath.trim() === '') {
-      try {
-        // 如果无法获取默认下载路径，使用当前用户的下载文件夹
-        const systemInfo = await window.electronAPI.invoke('system:info');
-        downloadPath = systemInfo.userInfo.homeDir + '/Downloads/P2PFiles';
-      } catch (error) {
-        addLog('error', `获取系统信息失败，使用备用路径: ${error}`);
-        // 最后的备选方案：使用当前用户的下载目录
-        try {
-          const systemInfo = await window.electronAPI.invoke('system:info');
-          downloadPath = systemInfo.userInfo.homeDir + '/P2PFiles';
-        } catch (e) {
-          addLog('error', `备用路径也失败: ${e}`);
-          // 如果所有方法都失败，抛出错误
-          throw new Error('无法确定有效的下载路径');
-        }
-      }
-    }
-    
-    const fileNameWithoutExt = fileInfo?.name?.replace(/\.[^/.]+$/, "") || 'unknown_file';
-    const fileExtension = fileInfo?.name?.match(/\.[^/.]+$/)?.[0] || '';
-    
-    // 使用标准的路径分隔符并规范化路径
-    const normalizedDownloadPath = downloadPath.replace(/[\\\/]/g, '/');
-    // 使用正斜杠进行路径拼接，然后在发送到主进程时再根据系统调整
-    storage.downloadFolderPath = `${normalizedDownloadPath}/${fileNameWithoutExt}_download${fileExtension}`;
-    
-    // 创建下载文件夹
-    try {
-      await window.electronAPI.invoke('file:create-directory', {
-        dirPath: storage.downloadFolderPath
-      });
-    } catch (error) {
-      addLog('error', `创建下载目录失败: ${error}`);
-      // 如果创建目录失败，尝试使用一个更简单的路径
-      const fallbackPath = downloadPath.replace(/[\\\/]$/, '') + '/P2PFiles';
-      storage.downloadFolderPath = fallbackPath;
-      await window.electronAPI.invoke('file:create-directory', {
-        dirPath: storage.downloadFolderPath
-      });
-    }
-    
-    storage.fileInfo = fileInfo;
-    storage.expectedTotalChunks = totalChunks;
-    storage.isInitialized = true;
   }
   
   const storage = receivedFileBlocks.get(transferId)!;
+  
+  if (!storage.isInitialized && fileInfo && fileInfo.size) {
+    await initFinalFile(transferId, fileInfo, totalChunks, fileInfo.size);
+  }
   
   // 检查是否已经处理过这个块
   const isDuplicate = storage.metadata.some(m => m.index === chunkIndex);
@@ -2170,70 +2164,53 @@ const handleFileChunkBinary = async (binaryData: ArrayBuffer, metadata: any, pee
     return;
   }
   
-  // 检查是否已接收过这个块，避免重复处理
   if (storage.receivedChunkIndexes.has(chunkIndex)) {
     addLog('debug', `块 ${chunkIndex} 已接收，跳过处理`);
     return;
   }
   
-  // 如果还没有初始化文件路径，先获取并设置
   if (!storage.isInitialized) {
-    // storage.downloadFolderPath 应该已经被 handleFileChunkMetadata 初始化了
-    // 如果没有，我们需要初始化它
-    if (!storage.downloadFolderPath) {
-      const downloadPath = await getDefaultDownloadPath();
-      // 如果下载路径为空，使用默认路径
-      const actualDownloadPath = downloadPath || (await window.electronAPI.invoke('system:info')).userInfo.homeDir + '/Downloads/P2PFiles';
-      const fileNameWithoutExt = fileInfo?.name?.replace(/\.[^/.]+$/, "") || 'unknown_file';
-      storage.downloadFolderPath = `${actualDownloadPath}/${fileNameWithoutExt}_download`;
-      
-      // 确保下载文件夹存在
-      await window.electronAPI.invoke('file:create-directory', {
-        dirPath: storage.downloadFolderPath
-      });
+    if (fileInfo && fileInfo.size) {
+      await initFinalFile(transferId, fileInfo, totalChunks, fileInfo.size);
+    } else {
+      addLog('error', `无法初始化文件: 缺少文件大小信息`);
+      return;
     }
-    storage.fileInfo = fileInfo;
-    storage.expectedTotalChunks = totalChunks;
-    storage.isInitialized = true;
+  }
+  
+  if (!storage.fileHandleId) {
+    addLog('error', `文件句柄未初始化，无法写入块 ${chunkIndex}`);
+    return;
   }
   
   try {
-    // 将接收到的块保存为单独的切片文件
-    const sliceFileName = `slice_${String(chunkIndex).padStart(5, '0')}.bin`;
-    const sliceFilePath = `${storage.downloadFolderPath}/${sliceFileName}`;
+    const offset = chunkIndex * CHUNK_SIZE;
     
-    // 保存切片到本地
-    await window.electronAPI.invoke('file:save-arraybuffer-as-file', {
-      filePath: sliceFilePath,
-      arrayBufferData: binaryData
+    await window.electronAPI.invoke('file:write-at-position', {
+      handleId: storage.fileHandleId,
+      arrayBufferData: binaryData,
+      position: offset
     });
     
-    // 标记该块已接收
     storage.receivedChunkIndexes.add(chunkIndex);
     
-    // ✅ 更新多源下载容错状态（如果是多源下载）
     updateMultiSourceReceivedChunk(transferId, chunkIndex, peerId);
     
-    // 更新接收性能指标
     updateReceiveRate(peerId, storage.totalReceivedBytes + binaryData.byteLength);
     storage.totalReceivedBytes += binaryData.byteLength;
     
-    // 更新进度
     const progress = Math.round((storage.receivedChunkIndexes.size / totalChunks) * 100);
     const transfer = transfers.value.find(t => t.id === transferId);
     if (transfer) {
       transfer.receivedChunks = storage.receivedChunkIndexes.size;
       transfer.progress = progress;
       
-      // 触发传输进度更新事件，供FileTransferList组件使用
       window.dispatchEvent(new CustomEvent('p2p:transfer-progress', {
         detail: { ...transfer }
       }));
     }
     
-    // 检查是否所有块都已接收 - 现在使用Set的大小来判断，性能更好
     if (storage.receivedChunkIndexes.size === totalChunks) {
-      // 所有块都已接收，现在组装完整文件
       await finalizeReceivedFile(transferId, fileInfo, totalChunks, peerId);
     }
   } catch (error) {
@@ -2250,48 +2227,27 @@ const finalizeReceivedFile = async (transferId: string, fileInfo: any, totalChun
   }
   
   try {
-    // 从切片文件组装完整文件
-    const fileNameWithoutExt = storage.fileInfo?.name?.replace(/\.[^/.]+$/, "") || 'unknown_file';
-    const fileExtension = storage.fileInfo?.name?.match(/\.[^/.]+$/)?.[0] || '';
-    // 将最终文件保存在下载目录中（与切片目录同级）
-    const finalFilePath = `${storage.downloadFolderPath}/${storage.fileInfo.name}`;
-    const slicesDir = storage.downloadFolderPath;
-    
-    addLog('info', `开始合并文件: ${storage.fileInfo?.name}, 切片数: ${totalChunks}`);
-    addLog('info', `切片目录: ${slicesDir}`);
-    addLog('info', `输出文件: ${finalFilePath}`);
-    
-    // ✅ 使用主进程的流式合并功能（避免内存溢出）
-    const mergeResult = await window.electronAPI.invoke('file:merge-slices', {
-      slicesDir: slicesDir,
-      outputPath: finalFilePath,
-      totalSlices: totalChunks,
-      slicePrefix: 'slice_',
-      sliceSuffix: '.bin',
-      deleteSlices: true
-    });
-    
-    if (!mergeResult.success) {
-      throw new Error(mergeResult.error || '文件合并失败');
+    if (storage.fileHandleId) {
+      await window.electronAPI.invoke('file:close-handle', {
+        handleId: storage.fileHandleId
+      });
+      addLog('debug', `已关闭文件句柄: ${storage.fileHandleId}`);
     }
     
-    // 清理存储
     receivedFileBlocks.delete(transferId);
     
-    // 更新传输状态
     const transfer = transfers.value.find(t => t.id === transferId);
     if (transfer) {
       transfer.status = 'completed';
       transfer.progress = 100;
-      transfer.filePath = finalFilePath;
+      transfer.filePath = storage.finalFilePath;
       
-      // 触发传输完成事件，供FileTransferList组件使用
       window.dispatchEvent(new CustomEvent('p2p:transfer-complete', {
         detail: { ...transfer }
       }));
     }
     
-    addLog('success', `文件已自动保存: ${finalFilePath}`);
+    addLog('success', `文件下载完成: ${storage.finalFilePath}`);
     
     // 向发送端发送传输完成确认
     const primaryChannel = dataChannels.get(peerId);
@@ -2631,8 +2587,13 @@ const startMultiSourceDownload = async (
   };
   multiSourceDownloads.set(transferId!, multiSourceState);
   
-  // 初始化接收文件块存储
   initReceivedFileBlocks(transferId!, { name: fileName, size: fileSize }, totalChunks);
+  
+  try {
+    await initFinalFile(transferId!, { name: fileName, size: fileSize }, totalChunks, fileSize);
+  } catch (error) {
+    addLog('error', `预创建文件失败: ${error}`);
+  }
   
   // 等待数据通道打开的辅助函数
   const waitForDataChannelOpen = (nodeId: string, timeout: number = 15000): Promise<boolean> => {
@@ -2775,7 +2736,6 @@ const startFileDownload = async (fileHash: string, fileName: string, fileSize: n
   let transfer: any;
   
   if (transferId) {
-    // 查找并更新已有的传输记录
     transfer = transfers.value.find(t => t.id === transferId);
     if (transfer) {
       transfer.peerId = targetUserId;
@@ -2784,7 +2744,6 @@ const startFileDownload = async (fileHash: string, fileName: string, fileSize: n
     }
   }
   
-  // 如果没有找到或没有传入，创建新的传输记录
   if (!transfer) {
     transferId = generateTransferId();
     transfer = {
@@ -2798,6 +2757,15 @@ const startFileDownload = async (fileHash: string, fileName: string, fileSize: n
       hash: fileHash
     };
     transfers.value.push(transfer);
+  }
+  
+  const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+  initReceivedFileBlocks(transferId!, { name: fileName, size: fileSize }, totalChunks);
+  
+  try {
+    await initFinalFile(transferId!, { name: fileName, size: fileSize }, totalChunks, fileSize);
+  } catch (error) {
+    addLog('error', `预创建文件失败: ${error}`);
   }
   
   // 发送下载请求
@@ -2949,27 +2917,27 @@ const uploadFile = async () => {
     }
   }
 
-// 接受文件传输
-const acceptFileTransfer = () => {
+const acceptFileTransfer = async () => {
   if (!fileTransferRequest.value.fromUserId) return
   
-  // 使用原始的transferId
   const transferId = fileTransferRequest.value.transferId || generateTransferId()
+  const fileInfo = fileTransferRequest.value.fileInfo;
+  const totalChunks = Math.ceil(fileInfo.size / 16384);
   
-  // 初始化接收文件块存储
-  initReceivedFileBlocks(transferId);
+  initReceivedFileBlocks(transferId, fileInfo, totalChunks);
   
-  // 创建接收传输记录
+  await initFinalFile(transferId, fileInfo, totalChunks, fileInfo.size);
+  
   const transfer = {
     id: transferId,
     peerId: fileTransferRequest.value.fromUserId,
-    fileName: fileTransferRequest.value.fileInfo.name,
-    fileSize: fileTransferRequest.value.fileInfo.size,
+    fileName: fileInfo.name,
+    fileSize: fileInfo.size,
     progress: 0,
     status: 'receiving',
     direction: 'receive',
     receivedChunks: 0,
-    totalChunks: Math.ceil(fileTransferRequest.value.fileInfo.size / 16384) // 16KB每块
+    totalChunks: totalChunks
   }
   transfers.value.push(transfer)
   
