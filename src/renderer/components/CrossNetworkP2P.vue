@@ -2184,7 +2184,7 @@ const handleFileChunkBinary = async (binaryData: ArrayBuffer, metadata: any, pee
   }
   
   try {
-    const offset = chunkIndex * CHUNK_SIZE;
+    const offset = (chunkIndex - 1) * CHUNK_SIZE;
     
     await window.electronAPI.invoke('file:write-at-position', {
       handleId: storage.fileHandleId,
