@@ -34,6 +34,12 @@ export class ConfigService {
         analytics: true,
         autoUpdate: true,
       },
+      tray: {
+        hasShownFirstTimeNotice: false,
+      },
+      userAgreement: {
+        accepted: false,
+      },
     };
   }
 

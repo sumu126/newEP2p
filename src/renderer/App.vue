@@ -1,5 +1,8 @@
 <template>
-  <div class="app-container" :class="themeClass">
+  <div>
+    <UserAgreement v-if="showAgreement" @accepted="onAgreementAccepted" />
+    
+    <div class="app-container" :class="themeClass">
     <aside class="sidebar">
       <div class="logo">
         <h2>{{ title }}</h2>
@@ -174,6 +177,7 @@
         </div>
       </div>
     </div>
+    </div>
   </div>
 </template>
 
@@ -181,9 +185,27 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import CrossNetworkP2P from './components/CrossNetworkP2P.vue'
 import FileTransferList from './components/FileTransferList.vue'
+import UserAgreement from './components/UserAgreement.vue'
 
 const title = ref('P2P文件传输')
 const activeMenu = ref('home') // 默认首页
+const showAgreement = ref(false)
+
+const checkAgreement = async () => {
+  try {
+    const config = await window.electronAPI.invoke('config:get')
+    if (!config?.userAgreement?.accepted) {
+      showAgreement.value = true
+    }
+  } catch (error) {
+    console.error('Failed to check user agreement:', error)
+    showAgreement.value = true
+  }
+}
+
+const onAgreementAccepted = () => {
+  showAgreement.value = false
+}
 
 type ThemeType = 'dark-green' | 'dark-black' | 'light-blue';
 const currentTheme = ref<ThemeType>('dark-green');
@@ -245,6 +267,8 @@ const inProgressTransfers = ref(0)
 
 // 在组件挂载时获取应用配置
 onMounted(async () => {
+  checkAgreement()
+  
   try {
     const config = await window.electronAPI.invoke('config:get');
     if (config && config.appName) {

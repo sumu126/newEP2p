@@ -8,6 +8,12 @@ export interface AppConfig {
   window: WindowConfig;
   features: FeatureFlags;
   tray: TrayConfig;
+  userAgreement: UserAgreementConfig;
+}
+
+export interface UserAgreementConfig {
+  accepted: boolean;
+  acceptedAt?: string;
 }
 
 export interface WindowConfig {

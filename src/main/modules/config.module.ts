@@ -43,6 +43,9 @@ export class ConfigModule {
       tray: {
         hasShownFirstTimeNotice: false,
       },
+      userAgreement: {
+        accepted: false,
+      },
     };
   }
 
