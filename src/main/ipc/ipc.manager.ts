@@ -74,6 +74,28 @@ export class IpcManager {
     
     // 注册P2P处理器
     this.registerP2PHandlers();
+    
+    // 初始化P2P共享文件
+    this.initializeSharedFiles();
+  }
+
+  private initializeSharedFiles(): void {
+    const configModule = this.moduleManager.getModule('ConfigModule') as ConfigModule;
+    if (configModule) {
+      const config = configModule.getConfig();
+      const allFiles: any[] = [];
+      
+      if (config.sharedFolders && Array.isArray(config.sharedFolders)) {
+        for (const folder of config.sharedFolders) {
+          if (folder.files && Array.isArray(folder.files)) {
+            allFiles.push(...folder.files);
+          }
+        }
+      }
+      
+      this.p2pHandler.setSharedFiles(allFiles);
+      console.log(`初始化P2P共享文件: ${allFiles.length} 个文件`);
+    }
   }
 
   private initializeConfigHandler(): void {
@@ -121,7 +143,20 @@ export class IpcManager {
     this.registerHandler({
       channel: IPC_CHANNELS.CONFIG_UPDATE,
       handler: (event: IpcMainInvokeEvent, updates: any): Promise<any> => {
-        return this.configHandler!.updateConfig(event, updates);
+        const result = this.configHandler!.updateConfig(event, updates);
+        
+        if (updates.sharedFolders) {
+          const allFiles: any[] = [];
+          for (const folder of updates.sharedFolders) {
+            if (folder.files && Array.isArray(folder.files)) {
+              allFiles.push(...folder.files);
+            }
+          }
+          this.p2pHandler.setSharedFiles(allFiles);
+          console.log(`配置更新，重新设置P2P共享文件: ${allFiles.length} 个文件`);
+        }
+        
+        return result;
       },
     });
   }

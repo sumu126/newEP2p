@@ -40,6 +40,7 @@ export class ConfigService {
       userAgreement: {
         accepted: false,
       },
+      sharedFolders: [],
     };
   }
 

@@ -9,11 +9,25 @@ export interface AppConfig {
   features: FeatureFlags;
   tray: TrayConfig;
   userAgreement: UserAgreementConfig;
+  sharedFolders: SharedFolder[];
 }
 
 export interface UserAgreementConfig {
   accepted: boolean;
   acceptedAt?: string;
+}
+
+export interface SharedFile {
+  hash: string;
+  fileName: string;
+  filePath: string;
+  fileSize: number;
+}
+
+export interface SharedFolder {
+  path: string;
+  files: SharedFile[];
+  lastScanAt?: string;
 }
 
 export interface WindowConfig {

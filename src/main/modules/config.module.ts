@@ -46,6 +46,7 @@ export class ConfigModule {
       userAgreement: {
         accepted: false,
       },
+      sharedFolders: [],
     };
   }
 

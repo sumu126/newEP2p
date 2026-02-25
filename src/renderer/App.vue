@@ -28,6 +28,15 @@
             </a>
           </li>
           <li>
+            <a href="#"
+               :class="{ active: activeMenu === 'share' }" 
+               @click.prevent="changeMenu('share')"
+               class="menu-item">
+              <span class="icon">📂</span>
+              <span class="text">共享文件</span>
+            </a>
+          </li>
+          <li>
             <a href="#" 
                :class="{ active: activeMenu === 'config' }" 
                @click.prevent="changeMenu('config')"
@@ -78,6 +87,11 @@
               </div>
             </div>
           </div>
+        </div>
+        
+        <!-- 共享文件管理内容 -->
+        <div class="page-content" :class="{ active: activeMenu === 'share' }" v-show="activeMenu === 'share'">
+          <SharedFiles ref="sharedFilesRef" />
         </div>
         
         <!-- 配置内容 -->
@@ -186,9 +200,11 @@ import { ref, onMounted, computed, watch } from 'vue'
 import CrossNetworkP2P from './components/CrossNetworkP2P.vue'
 import FileTransferList from './components/FileTransferList.vue'
 import UserAgreement from './components/UserAgreement.vue'
+import SharedFiles from './components/SharedFiles.vue'
 
 const title = ref('P2P文件传输')
 const activeMenu = ref('home') // 默认首页
+const sharedFilesRef = ref<any>(null)
 const showAgreement = ref(false)
 
 const checkAgreement = async () => {
@@ -313,6 +329,7 @@ const getCurrentPageTitle = computed(() => {
   const titles = {
     'home': '控制面板',
     'transfer': '文件传输',
+    'share': '共享文件管理',
     'config': '系统配置'
   }
   return titles[activeMenu.value as keyof typeof titles] || 'P2P文件传输'

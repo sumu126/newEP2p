@@ -48,109 +48,6 @@
       </div>
     </div>
 
-    <!-- 共享文件管理 -->
-    <div class="share-management">
-      <h3>共享文件管理</h3>
-      <div class="input-group">
-        <input 
-          v-model="shareDirPath" 
-          placeholder="共享目录路径" 
-          class="input-field"
-          readonly
-        />
-        <button 
-          @click="selectShareDirectory" 
-          class="btn btn-secondary"
-          :disabled="!isSignalingConnected || isScanning"
-        >
-          选择共享目录
-        </button>
-        <button 
-          @click="registerSharedFiles" 
-          class="btn btn-primary"
-          :disabled="!shareDirPath || !isSignalingConnected || isScanning"
-        >
-          {{ isScanning ? '扫描中...' : '注册共享文件' }}
-        </button>
-        <button 
-          v-if="isScanning"
-          @click="cancelFileScan"
-          class="btn btn-cancel"
-        >
-          取消
-        </button>
-      </div>
-      
-      <!-- 扫描进度显示 -->
-      <div v-if="isScanning" class="scan-progress-container">
-        <div class="progress-header">
-          <div class="progress-title">
-            <span class="loading-icon">⏳</span>
-            <span>正在扫描文件并计算哈希...</span>
-          </div>
-          <div class="progress-percentage">{{ scanProgress.progress }}%</div>
-        </div>
-        
-        <!-- 总体进度条 -->
-        <div class="progress-bar-container">
-          <div class="progress-bar" :style="{ width: scanProgress.progress + '%' }"></div>
-        </div>
-        
-        <!-- 扫描详情 -->
-        <div class="progress-details">
-          <div class="detail-item">
-            <span class="detail-label">当前文件:</span>
-            <span class="detail-value">{{ scanProgress.currentFile || '准备中...' }}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">文件进度:</span>
-            <span class="detail-value">{{ scanProgress.currentIndex }} / {{ scanProgress.totalFiles }}</span>
-          </div>
-        </div>
-        
-        <!-- 哈希计算进度 -->
-        <div v-if="hashProgress.fileName" class="hash-progress-container">
-          <div class="hash-progress-header">
-            <span class="hash-icon">🔐</span>
-            <span class="hash-filename">{{ hashProgress.fileName }}</span>
-          </div>
-          <div class="hash-progress-bar-container">
-            <div class="hash-progress-bar" :style="{ width: hashProgress.progress + '%' }"></div>
-          </div>
-          <div class="hash-progress-info">
-            <span>{{ formatFileSize(hashProgress.processedBytes) }} / {{ formatFileSize(hashProgress.totalBytes) }}</span>
-            <span>{{ hashProgress.progress }}%</span>
-          </div>
-        </div>
-      </div>
-      
-      <!-- 我的共享文件列表 -->
-      <div class="my-shared-files" v-if="sharedFiles.length > 0 && !isScanning">
-        <h4>我的共享文件 ({{ sharedFiles.length }})</h4>
-        <div class="file-list">
-          <div 
-            v-for="file in sharedFiles" 
-            :key="file.hash"
-            class="file-item"
-          >
-            <div class="file-info">
-              <span class="file-name">{{ file.fileName }}</span>
-              <span class="file-size">{{ formatFileSize(file.fileSize) }}</span>
-            </div>
-            <div class="file-actions">
-              <button 
-                @click="copyFileHash(file.hash)"
-                class="btn-copy-hash"
-                title="复制文件哈希值"
-              >
-                📋 复制哈希
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- 文件搜索 -->
     <div class="file-search">
       <h3>搜索全网文件</h3>
@@ -282,8 +179,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { io, Socket } from 'socket.io-client'
 import { IPC_CHANNELS } from '../../shared/constants'
+import { socketService } from '../services/socket.service'
 
 // 定义属性
 const props = defineProps<{ signalingServerUrl?: string }>()
@@ -299,9 +196,7 @@ const isSignalingConnected = ref(false)
 const userId = ref('')
 const p2pConnections = ref<any[]>([])
 
-// 新增：文件搜索和共享相关数据
-const shareDirPath = ref('')
-const sharedFiles = ref<any[]>([])
+// 文件搜索相关数据
 const searchQuery = ref('')
 const searchResults = ref<any[]>([])
 const selectedPeerId = ref('')
@@ -309,20 +204,8 @@ const selectedFile = ref<File | null>(null)
 const transfers = ref<any[]>([])
 const logs = ref<any[]>([])
 
-// 文件扫描进度相关
-const isScanning = ref(false)
-const scanProgress = ref({
-  currentFile: '',
-  currentIndex: 0,
-  totalFiles: 0,
-  progress: 0
-})
-const hashProgress = ref({
-  fileName: '',
-  processedBytes: 0,
-  totalBytes: 0,
-  progress: 0
-})
+// 临时分享文件（用于临时上传分享）
+const tempSharedFiles = ref<any[]>([])
 
 // 计算属性 - 获取唯一的对等连接（排除通道后缀）
 const uniqueP2PConnections = computed(() => {
@@ -347,9 +230,6 @@ const fileTransferRequest = ref<{
 
 // DOM元素引用
 const fileInput = ref<HTMLInputElement | null>(null)
-
-// Socket.io连接实例
-let socket: Socket | null = null
 
 // WebRTC相关变量
 let peerConnections: Map<string, RTCPeerConnection> = new Map()
@@ -412,27 +292,39 @@ const connectToSignalingServer = () => {
     if (!signalingUrl.startsWith('http://') && !signalingUrl.startsWith('https://')) {
       signalingUrl = 'http://' + signalingUrl
     }
-    const serverUrl = signalingUrl.replace('http://', 'ws://').replace('https://', 'wss://')
+    
     addLog('info', `正在连接到信令服务器`)
     
-    socket = io(serverUrl, {
-      reconnection: true,
-      reconnectionAttempts: 10, // 增加重连尝试次数
-      reconnectionDelay: 2000, // 增加重连延迟
-      reconnectionDelayMax: 5000, // 设置最大重连延迟
-      timeout: 20000, // 增加超时时间到20秒
-      transports: ['websocket'], // 优先使用WebSocket
-      // 添加更多连接选项
-      randomizationFactor: 0.5, // 随机化重连时间
-      pingTimeout: 10000, // ping超时
-      pingInterval: 5000 // ping间隔
+    socketService.connect(signalingUrl)
+    
+    // 同步连接状态
+    isSignalingConnected.value = socketService.isConnected.value
+    userId.value = socketService.userId.value
+    
+    // 监听连接状态变化
+    watch(socketService.isConnected, (connected) => {
+      isSignalingConnected.value = connected
+      if (connected) {
+        userId.value = socketService.userId.value
+        addLog('success', '已连接到信令服务器')
+      }
     })
-
-    socket.on('connect', () => {
-      isSignalingConnected.value = true
-      userId.value = socket!.id || ''
+    
+    watch(socketService.userId, (newUserId) => {
+      userId.value = newUserId
+    })
+    
+    // 如果已经连接，设置状态
+    if (socketService.isConnected.value) {
+      userId.value = socketService.userId.value
       addLog('success', '已连接到信令服务器')
-    })
+    }
+    
+    const socket = socketService.getSocket()
+    if (!socket) {
+      addLog('error', '无法获取Socket实例')
+      return
+    }
 
     socket.on('disconnect', (reason) => {
       isSignalingConnected.value = false
@@ -452,7 +344,7 @@ const connectToSignalingServer = () => {
 
     socket.on('reconnect', (attemptNumber) => {
       isSignalingConnected.value = true
-      userId.value = socket!.id || ''
+      userId.value = socketService.userId.value
       addLog('success', `信令服务器重连成功 (尝试次数: ${attemptNumber})`)
     })
 
@@ -592,138 +484,13 @@ const connectToSignalingServer = () => {
 
 // 断开信令服务器连接
 const disconnectFromSignalingServer = () => {
-  if (socket) {
-    socket.disconnect()
-    socket = null
-  }
+  socketService.disconnect()
 }
 
 // 重新连接信令服务器
 const reconnectSignalingServer = async () => {
   addLog('info', '正在尝试重新连接信令服务器...')
-  // 断开现有连接
-  if (socket) {
-    try {
-      socket.disconnect()
-    } catch (error) {
-      addLog('warning', `断开现有连接时出错: ${error}`)
-    }
-    socket = null
-  }
-  
-  // 重置连接状态
-  isSignalingConnected.value = false
-  
-  // 立即尝试重连
-  connectToSignalingServer()
-}
-
-// 选择共享目录
-const selectShareDirectory = async () => {
-  try {
-    const result = await window.electronAPI.invoke('p2p:select-share-dir')
-    if (!result.canceled && result.filePath) {
-      shareDirPath.value = result.filePath
-      addLog('info', `已选择共享目录: ${result.filePath}`)
-    }
-  } catch (error) {
-    addLog('error', `选择共享目录失败: ${error}`)
-  }
-}
-
-// 注册共享文件
-const registerSharedFiles = async () => {
-  if (!shareDirPath.value) {
-    addLog('error', '请先选择共享目录')
-    return
-  }
-
-  try {
-    // 设置扫描状态
-    isScanning.value = true
-    scanProgress.value = {
-      currentFile: '',
-      currentIndex: 0,
-      totalFiles: 0,
-      progress: 0
-    }
-    hashProgress.value = {
-      fileName: '',
-      processedBytes: 0,
-      totalBytes: 0,
-      progress: 0
-    }
-    
-    addLog('info', '开始扫描共享目录并计算文件哈希...')
-    
-    // 设置进度监听器
-    const scanProgressListener = (event: any, data: any) => {
-      scanProgress.value = {
-        currentFile: data.currentFile,
-        currentIndex: data.currentIndex,
-        totalFiles: data.totalFiles,
-        progress: data.progress
-      }
-    }
-    
-    const hashProgressListener = (event: any, data: any) => {
-      hashProgress.value = {
-        fileName: data.fileName,
-        processedBytes: data.processedBytes,
-        totalBytes: data.totalBytes,
-        progress: data.progress
-      }
-    }
-    
-    window.electronAPI.on('p2p:scan-progress', scanProgressListener)
-    window.electronAPI.on('p2p:hash-progress', hashProgressListener)
-    
-    try {
-      // 扫描共享目录中的文件并计算哈希
-      const files = await window.electronAPI.p2p.scanAndHashFiles(shareDirPath.value)
-      
-      // 更新本地共享文件列表
-      sharedFiles.value = files
-      
-      // 同步共享文件列表到主进程的P2P处理器
-      try {
-        await window.electronAPI.invoke(IPC_CHANNELS.P2P_SET_SHARED_FILES, files);
-      } catch (syncError) {
-        addLog('error', `同步共享文件列表到主进程失败: ${syncError}`)
-      }
-      
-      // 向信令服务器注册文件
-      if (socket) {
-        socket.emit('register-files', files.map(file => ({
-          hash: file.hash,
-          fileName: file.fileName,
-          fileSize: file.fileSize
-        })))
-        
-        addLog('success', `已注册 ${files.length} 个共享文件到全局索引`)
-      }
-    } finally {
-      // 移除进度监听器
-      window.electronAPI.removeListener('p2p:scan-progress', scanProgressListener)
-      window.electronAPI.removeListener('p2p:hash-progress', hashProgressListener)
-      isScanning.value = false
-    }
-  } catch (error: any) {
-    isScanning.value = false
-    if (error.message === '文件扫描已取消') {
-      addLog('warning', '文件扫描已取消')
-    } else {
-      addLog('error', `注册共享文件失败: ${error}`)
-    }
-  }
-}
-
-// 取消文件扫描
-const cancelFileScan = async () => {
-  if (isScanning.value) {
-    addLog('warning', '正在取消文件扫描...')
-    await window.electronAPI.p2p.cancelScan()
-  }
+  socketService.reconnect()
 }
 
 // 搜索文件
@@ -733,18 +500,18 @@ const searchFiles = () => {
     return
   }
   
-  if (!socket) {
+  if (!socketService.isConnected.value) {
     addLog('error', '未连接到信令服务器')
     return
   }
   
-  socket.emit('search-files', searchQuery.value.trim())
+  socketService.emit('search-files', searchQuery.value.trim())
   addLog('info', `正在搜索: ${searchQuery.value}`)
 }
 
 // 下载文件
 const downloadFile = (result: any) => {
-  if (!socket) {
+  if (!socketService.isConnected.value) {
     addLog('error', '未连接到信令服务器')
     return
   }
@@ -786,13 +553,13 @@ const downloadFile = (result: any) => {
   addLog('info', `开始搜索文件 ${result.fileName} 的下载源...`)
   
   // 请求下载文件的节点信息
-  socket.emit('request-download', result.hash)
+  socketService.emit('request-download', result.hash)
 }
 
 // 连接到用户
 const connectToUser = async (targetUserId: string) => {
   return new Promise<void>((resolve, reject) => {
-    if (!socket) {
+    if (!socketService.isConnected.value) {
       addLog('error', '未连接到信令服务器');
       reject(new Error('未连接到信令服务器'));
       return;
@@ -827,7 +594,7 @@ const connectToUser = async (targetUserId: string) => {
       peerConnection.createOffer()
         .then(offer => peerConnection.setLocalDescription(offer))
         .then(() => {
-          socket.emit('webrtc-signal', {
+          socketService.emit('webrtc-signal', {
             targetUserId: targetUserId,
             signal: { type: 'offer', sdp: peerConnection.localDescription?.sdp }
           });
@@ -892,8 +659,8 @@ const createPeerConnection = (peerId: string) => {
 
   // ICE候选处理
   peerConnection.onicecandidate = (event) => {
-    if (event.candidate && socket) {
-      socket.emit('webrtc-signal', {
+    if (event.candidate && socketService.isConnected.value) {
+      socketService.emit('webrtc-signal', {
         targetUserId: peerId,
         signal: {
           type: 'candidate',
@@ -1332,8 +1099,9 @@ const attemptReconnect = async (peerId: string) => {
   addLog('info', `正在尝试重新连接到 ${cleanPeerId}`);
   
   // 发起连接请求
-  socket.value?.emit('request-webrtc-offer', {
-    targetUserId: cleanPeerId
+  socketService.emit('webrtc-signal', {
+    targetUserId: cleanPeerId,
+    signal: { type: 'reconnect' }
   });
 }
 
@@ -1392,8 +1160,8 @@ const handleWebRTCOffer = async (data: any) => {
   const answer = await peerConnection.createAnswer()
   await peerConnection.setLocalDescription(answer)
 
-  if (socket) {
-    socket.emit('webrtc-signal', {
+  if (socketService.isConnected.value) {
+    socketService.emit('webrtc-signal', {
       targetUserId: fromUserId,
       signal: {
         type: 'answer',
@@ -2835,7 +2603,7 @@ const uploadFile = async () => {
     return
   }
   
-  if (!socket) {
+  if (!socketService.isConnected.value) {
     addLog('error', '未连接到信令服务器，无法分享文件')
     return
   }
@@ -2858,10 +2626,10 @@ const uploadFile = async () => {
       filePath: '' // 临时文件，没有实际路径
     };
     
-    sharedFiles.value.push(newSharedFile);
+    tempSharedFiles.value.push(newSharedFile);
     
     // 向信令服务器注册这个新文件
-    socket.emit('register-files', [{
+    socketService.emit('register-files', [{
       hash: hash,
       fileName: file.name,
       fileSize: file.size
@@ -2880,19 +2648,21 @@ const uploadFile = async () => {
 }
 
 // 文件传输事件监听器
-  const setupFileTransferEventListeners = () => {
-    if (socket) {
-      socket.on('file-transfer-request', handleFileTransferRequest)
-      socket.on('file-transfer-response', handleFileTransferResponse)
-    }
+const setupFileTransferEventListeners = () => {
+  const socket = socketService.getSocket()
+  if (socket) {
+    socket.on('file-transfer-request', handleFileTransferRequest)
+    socket.on('file-transfer-response', handleFileTransferResponse)
   }
-  
-  const removeFileTransferEventListeners = () => {
-    if (socket) {
-      socket.off('file-transfer-request', handleFileTransferRequest)
-      socket.off('file-transfer-response', handleFileTransferResponse)
-    }
+}
+
+const removeFileTransferEventListeners = () => {
+  const socket = socketService.getSocket()
+  if (socket) {
+    socket.off('file-transfer-request', handleFileTransferRequest)
+    socket.off('file-transfer-response', handleFileTransferResponse)
   }
+}
   
   // 文件传输请求处理
   const handleFileTransferRequest = (data: any) => {
@@ -2955,8 +2725,8 @@ const acceptFileTransfer = async () => {
     }))
   } else {
     // 如果数据通道未打开，通过socket.io发送（备用方案）
-    if (socket) {
-      socket.emit('file-transfer-response', {
+    if (socketService.isConnected.value) {
+      socketService.emit('file-transfer-response', {
         targetUserId: fileTransferRequest.value.fromUserId,
         accepted: true,
         fileInfo: fileTransferRequest.value.fileInfo
@@ -2982,8 +2752,8 @@ const rejectFileTransfer = () => {
     }))
   } else {
     // 如果数据通道未打开，通过socket.io发送（备用方案）
-    if (socket) {
-      socket.emit('file-transfer-response', {
+    if (socketService.isConnected.value) {
+      socketService.emit('file-transfer-response', {
         targetUserId: fileTransferRequest.value.fromUserId,
         accepted: false,
         fileInfo: fileTransferRequest.value.fileInfo
