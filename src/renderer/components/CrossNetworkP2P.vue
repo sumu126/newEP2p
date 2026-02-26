@@ -1341,28 +1341,51 @@ const handleFileTransferConfirmed = (data: any, peerId: string) => {
 const startFileSend = async (transferId: string, peerId: string, filePath: string, fileName: string, fileSize: number, fileHash: string) => {
   addLog('info', `开始发送文件: ${fileName} 到 ${peerId.substring(0, 6)}`)
   
-  // 检查数据通道是否就绪
-  const dataChannel = dataChannels.get(peerId)
-  if (!dataChannel || dataChannel.readyState !== 'open') {
-    addLog('error', '数据通道未就绪，无法传输文件')
-    return
+  let cleanPeerId = peerId;
+  if (cleanPeerId.includes('-ch')) {
+    cleanPeerId = cleanPeerId.split('-ch')[0];
+  } else if (cleanPeerId.includes('-incoming')) {
+    cleanPeerId = cleanPeerId.split('-incoming')[0];
   }
   
+  let channels = multiDataChannels.get(cleanPeerId);
+  
+  if (!channels || channels.length === 0) {
+    const singleChannel = dataChannels.get(cleanPeerId);
+    if (singleChannel) {
+      channels = [singleChannel];
+    } else {
+      const allChannels: RTCDataChannel[] = [];
+      for (const [key, channelList] of multiDataChannels.entries()) {
+        if (key === cleanPeerId || key.startsWith(`${cleanPeerId}-`)) {
+          allChannels.push(...channelList);
+        }
+      }
+      
+      if (allChannels.length > 0) {
+        channels = allChannels;
+      } else {
+        addLog('error', '没有可用的数据通道');
+        return;
+      }
+    }
+  }
+  
+  const availableChannels = channels.filter(channel => channel.readyState === 'open');
+  if (availableChannels.length === 0) {
+    addLog('error', '没有可用的数据通道');
+    return;
+  }
+  channels = availableChannels;
+  
+  const dataChannel = channels[0];
+  
   try {
-    // 从主进程加载文件内容
-    const fileData: ArrayBuffer = await window.electronAPI.invoke('file:read-arraybuffer', { filePath });
-    
-    // 创建一个Blob对象来模拟File对象
-    const fileBlob = new Blob([fileData]);
-    const file = new File([fileBlob], fileName, { type: 'application/octet-stream' });
-    
-    // 更新传输状态
     const transfer = transfers.value.find(t => t.id === transferId);
     if (transfer) {
       transfer.status = 'sending';
     }
     
-    // 发送文件传输开始信号
     dataChannel.send(JSON.stringify({
       type: 'file-transfer-start',
       transferId: transferId,
@@ -1371,21 +1394,179 @@ const startFileSend = async (transferId: string, peerId: string, filePath: strin
         size: fileSize,
         hash: fileHash
       }
-    }))
+    }));
     
     addLog('info', `已发送文件传输开始信号: ${fileName}`)
     
-    // 使用多通道并行传输文件块
-    await sendFileChunksParallel(peerId, file, transferId);
+    await sendFileChunksStreaming(cleanPeerId, filePath, fileName, fileSize, transferId, channels);
     
   } catch (error) {
     addLog('error', `发送文件失败: ${error}`)
     
-    // 更新传输状态
-    const transfer = transfers.value.find(t => t.id === transferId)
+    const transfer = transfers.value.find(t => t.id === transferId);
     if (transfer) {
-      transfer.status = 'failed'
+      transfer.status = 'failed';
     }
+  }
+}
+
+const sendFileChunksStreaming = async (
+  cleanPeerId: string,
+  filePath: string,
+  fileName: string,
+  fileSize: number,
+  transferId: string,
+  channels: RTCDataChannel[]
+) => {
+  const OPTIMIZED_CHUNK_SIZE = fileSize > 100 * 1024 * 1024 ? 256 * 1024 : 65536;
+  const optimizedTotalChunks = Math.ceil(fileSize / OPTIMIZED_CHUNK_SIZE);
+  const MAX_PENDING_SEND = 40;
+  let pendingSends = 0;
+  let sentChunks = 0;
+  
+  addLog('info', `开始使用 ${channels.length} 个通道流式传输文件: ${fileName}`);
+  
+  const sendChunk = async (chunkIndex: number) => {
+    const start = chunkIndex * OPTIMIZED_CHUNK_SIZE;
+    const end = Math.min(start + OPTIMIZED_CHUNK_SIZE, fileSize);
+    const chunkSize = end - start;
+    
+    const channelIndex = chunkIndex % channels.length;
+    const dataChannel = channels[channelIndex];
+    
+    if (!dataChannel || dataChannel.readyState !== 'open') {
+      return;
+    }
+    
+    while (pendingSends >= MAX_PENDING_SEND) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    
+    const BUFFER_THRESHOLD = Math.max(adaptiveAdjustBufferSize(cleanPeerId), 8 * 1024 * 1024);
+    if (dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
+      await new Promise(resolve => {
+        const checkBuffer = () => {
+          if (dataChannel.bufferedAmount <= BUFFER_THRESHOLD * 0.7) {
+            resolve(true);
+          } else {
+            setTimeout(checkBuffer, 5);
+          }
+        };
+        checkBuffer();
+      });
+    }
+    
+    pendingSends++;
+    
+    try {
+      const chunkBuffer = await window.electronAPI.invoke('file:read-array-buffer-range', {
+        filePath: filePath,
+        start: start,
+        length: chunkSize
+      });
+      
+      dataChannel.send(JSON.stringify({
+        type: 'file-chunk-metadata',
+        transferId: transferId,
+        chunkIndex: chunkIndex + 1,
+        totalChunks: optimizedTotalChunks,
+        chunkSize: chunkSize,
+        channelIndex: channelIndex,
+        fileInfo: {
+          name: fileName,
+          size: fileSize
+        }
+      }));
+      
+      dataChannel.send(chunkBuffer);
+      
+      sentChunks++;
+      
+      if (sentChunks % 5 === 0 || sentChunks === optimizedTotalChunks) {
+        const transfer = transfers.value.find(t => t.id === transferId);
+        if (transfer) {
+          transfer.progress = Math.round((sentChunks / optimizedTotalChunks) * 90);
+            
+          window.dispatchEvent(new CustomEvent('p2p:transfer-progress', {
+            detail: { ...transfer }
+          }));
+        }
+      }
+      
+      if (fileSize > 100 * 1024 * 1024) {
+        if (sentChunks % 100 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 1));
+        }
+      } else if (fileSize > 50 * 1024 * 1024) {
+        if (sentChunks % 50 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 1));
+        }
+      }
+    } catch (error) {
+      addLog('error', `读取文件块失败: ${error}`);
+    } finally {
+      pendingSends--;
+    }
+  };
+  
+  const chunkPromises: Promise<void>[] = [];
+  const maxConcurrentReads = 20;
+  
+  for (let i = 0; i < optimizedTotalChunks; i += maxConcurrentReads) {
+    const batchEnd = Math.min(i + maxConcurrentReads, optimizedTotalChunks);
+    const batchPromises: Promise<void>[] = [];
+    
+    for (let j = i; j < batchEnd; j++) {
+      batchPromises.push(sendChunk(j));
+    }
+    
+    await Promise.all(batchPromises);
+  }
+  
+  while (pendingSends > 0) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  
+  const primaryChannel = channels[0];
+  await new Promise(resolve => {
+    const maxWaitTime = 10000;
+    const startTime = Date.now();
+    
+    const waitForSend = () => {
+      if (primaryChannel.bufferedAmount === 0 || Date.now() - startTime > maxWaitTime) {
+        resolve(true);
+      } else {
+        setTimeout(waitForSend, 10);
+      }
+    };
+    waitForSend();
+  });
+  
+  const completionPromise = new Promise((resolve, reject) => {
+    transferCompletionPromises.set(transferId, { resolve, reject });
+    
+    setTimeout(() => {
+      if (transferCompletionPromises.has(transferId)) {
+        transferCompletionPromises.delete(transferId);
+        const transfer = transfers.value.find(t => t.id === transferId);
+        if (transfer) {
+          transfer.status = 'completed';
+          transfer.progress = 100;
+            
+          window.dispatchEvent(new CustomEvent('p2p:transfer-complete', {
+            detail: { ...transfer }
+          }));
+        }
+        resolve(true);
+      }
+    }, 30000);
+  });
+  
+  try {
+    await completionPromise;
+    addLog('success', `文件传输完成: ${fileName}`);
+  } catch (error) {
+    addLog('error', `等待传输确认超时: ${error}`);
   }
 }
 
@@ -2918,143 +3099,117 @@ const sendFileChunksParallel = async (peerId: string, file: File, transferId: st
   addLog('info', `开始使用 ${channels.length} 个通道传输文件: ${file.name}`);
   
   try {
-    // 增加块大小以提高传输效率
-    const OPTIMIZED_CHUNK_SIZE = file.size > 100 * 1024 * 1024 ? 256 * 1024 : 65536; // 对大文件使用256KB块，小文件使用64KB块
+    const OPTIMIZED_CHUNK_SIZE = file.size > 100 * 1024 * 1024 ? 256 * 1024 : 65536;
     const optimizedTotalChunks = Math.ceil(file.size / OPTIMIZED_CHUNK_SIZE);
     
-    // 首先将整个文件读取到内存中，但分块处理以避免内存峰值
-    const fileBuffer = await file.arrayBuffer();
-    
-    // 优化：使用异步队列和更高效的流量控制
-    const MAX_PENDING_SEND = 40; // 增加最大待发送块数以提高并发性
+    const MAX_PENDING_SEND = 40;
     let pendingSends = 0;
+    let sentChunks = 0;
     
-    // 使用更大的批次处理，提高效率
-    const batchSize = 20; // 每次处理20个块
-    
-    for (let batchStart = 0; batchStart < optimizedTotalChunks; batchStart += batchSize) {
-      const batchEnd = Math.min(batchStart + batchSize, optimizedTotalChunks);
+    const sendChunk = async (chunkIndex: number) => {
+      const start = chunkIndex * OPTIMIZED_CHUNK_SIZE;
+      const end = Math.min(start + OPTIMIZED_CHUNK_SIZE, file.size);
+      const chunkSize = end - start;
       
-      for (let chunkIndex = batchStart; chunkIndex < batchEnd; chunkIndex++) {
-        // 检查是否有可用通道
-        if (channels.length === 0) {
-          addLog('error', `没有可用的通道，终止传输`);
-          const transfer = transfers.value.find(t => t.id === transferId)
-          if (transfer) {
-            transfer.status = 'failed';
-          }
-          return;
-        }
+      const channelIndex = chunkIndex % channels.length;
+      const dataChannel = channels[channelIndex];
+      
+      if (!dataChannel || dataChannel.readyState !== 'open') {
+        return;
+      }
+      
+      while (pendingSends >= MAX_PENDING_SEND) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      
+      const BUFFER_THRESHOLD = Math.max(adaptiveAdjustBufferSize(cleanPeerId), 8 * 1024 * 1024);
+      if (dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
+        await new Promise(resolve => {
+          const checkBuffer = () => {
+            if (dataChannel.bufferedAmount <= BUFFER_THRESHOLD * 0.7) {
+              resolve(true);
+            } else {
+              setTimeout(checkBuffer, 5);
+            }
+          };
+          checkBuffer();
+        });
+      }
+      
+      pendingSends++;
+      
+      try {
+        const chunkBuffer = await window.electronAPI.invoke('file:read-array-buffer-range', {
+          filePath: file.path,
+          start: start,
+          length: chunkSize
+        });
         
-        // 控制并发发送的数量
-        while (pendingSends >= MAX_PENDING_SEND) {
-          // 稍微等待，让一些发送操作完成
-          await new Promise(resolve => setTimeout(resolve, 5)); // 减少等待时间
-        }
-        
-        // 从预先加载的buffer中切片
-        const start = chunkIndex * OPTIMIZED_CHUNK_SIZE;
-        const end = Math.min(start + OPTIMIZED_CHUNK_SIZE, file.size);
-        const chunk = fileBuffer.slice(start, end); // 直接从ArrayBuffer切片
-        
-        // 选择一个通道进行发送（轮询）
-        const channelIndex = chunkIndex % channels.length;
-        const dataChannel = channels[channelIndex];
-        
-        // 检查通道状态
-        if (!dataChannel || dataChannel.readyState !== 'open') {
-          addLog('warning', `通道 ${channelIndex} 未就绪，尝试下一个通道`);
-          continue;
-        }
-        
-        // 增加pending计数
-        pendingSends++;
-        
-        // 获取自适应缓冲区大小
-        const BUFFER_THRESHOLD = Math.max(adaptiveAdjustBufferSize(cleanPeerId), 8 * 1024 * 1024); // 设置最小缓冲区大小为8MB以提高吞吐量
-        if (dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
-          // 等待缓冲区清空一些后再继续
-          await new Promise(resolve => {
-            const checkBuffer = () => {
-              if (dataChannel.bufferedAmount <= BUFFER_THRESHOLD * 0.7) { // 当缓冲区降至阈值的70%时继续
-                resolve(true);
-              } else {
-                setTimeout(checkBuffer, 5); // 每5ms检查一次，更快响应
-              }
-            };
-            checkBuffer();
-          });
-        }
-        
-        // 更新传输速率监控（每次发送数据后）
-        const perf = networkPerformance.get(cleanPeerId);
-        if (perf) {
-          updateTransferRate(cleanPeerId, dataChannel.bufferedAmount + chunk.byteLength);
-        }
-        
-        // 直接发送ArrayBuffer，不进行Base64编码
-        // 首先发送包含元数据的消息
         dataChannel.send(JSON.stringify({
           type: 'file-chunk-metadata',
           transferId: transferId,
           chunkIndex: chunkIndex + 1,
           totalChunks: optimizedTotalChunks,
-          chunkSize: chunk.byteLength, // 传递实际字节长度
-          channelIndex: channelIndex, // 通道索引
-          fileInfo: {  // 添加文件信息用于接收方匹配
+          chunkSize: chunkSize,
+          channelIndex: channelIndex,
+          fileInfo: {
             name: file.name,
             size: file.size
           }
         }));
         
-        // 然后发送实际的二进制数据
-        dataChannel.send(chunk);
+        dataChannel.send(chunkBuffer);
         
-        // 减少pending计数（在发送后）
-        pendingSends--;
+        sentChunks++;
         
-        // 更新进度 - 只在主线程更新以避免性能问题
-        if (chunkIndex % 5 === 0 || chunkIndex === optimizedTotalChunks - 1) { // 更频繁地更新进度
-          const transfer = transfers.value.find(t => t.id === transferId)
+        if (sentChunks % 5 === 0 || sentChunks === optimizedTotalChunks) {
+          const transfer = transfers.value.find(t => t.id === transferId);
           if (transfer) {
-            // 在发送阶段，只显示发送进度，而不是最终完成状态
-            // 标记为正在传输中，而不是完成
-            transfer.progress = Math.round(((chunkIndex + 1) / optimizedTotalChunks) * 90) // 限制在90%，保留10%给接收确认
+            transfer.progress = Math.round((sentChunks / optimizedTotalChunks) * 90);
             
-            // 触发传输进度更新事件，供FileTransferList组件使用
             window.dispatchEvent(new CustomEvent('p2p:transfer-progress', {
               detail: { ...transfer }
-            }))
+            }));
           }
         }
         
-        // 对于非常大的文件，减少延迟以提高速度
-        if (file.size > 100 * 1024 * 1024) { // 100MB以上文件
-          if (chunkIndex % 100 === 0) { // 减少延迟频率
-            await new Promise(resolve => setTimeout(resolve, 1)); // 减少延迟时间
+        if (file.size > 100 * 1024 * 1024) {
+          if (sentChunks % 100 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 1));
           }
-        } else if (file.size > 50 * 1024 * 1024) { // 50MB以上文件
-          if (chunkIndex % 50 === 0) { // 减少延迟频率
-            await new Promise(resolve => setTimeout(resolve, 1)); // 减少延迟时间
+        } else if (file.size > 50 * 1024 * 1024) {
+          if (sentChunks % 50 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 1));
           }
         }
+      } catch (error) {
+        addLog('error', `读取文件块失败: ${error}`);
+      } finally {
+        pendingSends--;
+      }
+    };
+    
+    const chunkPromises: Promise<void>[] = [];
+    const maxConcurrentReads = 20;
+    
+    for (let i = 0; i < optimizedTotalChunks; i += maxConcurrentReads) {
+      const batchEnd = Math.min(i + maxConcurrentReads, optimizedTotalChunks);
+      const batchPromises: Promise<void>[] = [];
+      
+      for (let j = i; j < batchEnd; j++) {
+        batchPromises.push(sendChunk(j));
       }
       
-      // 在批次之间最小化停顿
-      if (batchEnd < optimizedTotalChunks) {
-        await new Promise(resolve => setTimeout(resolve, 0)); // 最小延迟
-      }
+      await Promise.all(batchPromises);
     }
     
-    // 等待所有发送操作完成
     while (pendingSends > 0) {
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     
-    // 确保所有数据都已发送 - 使用主通道发送完成信号
     const primaryChannel = channels[0];
     await new Promise(resolve => {
-      const maxWaitTime = 10000; // 最大等待10秒
+      const maxWaitTime = 10000;
       const startTime = Date.now();
       
       const waitForSend = () => {
