@@ -274,6 +274,32 @@ export class FileHandler extends BaseIpcHandler {
     });
   }
   
+  // 批量写入文件块
+  async writeBatch(event: IpcMainInvokeEvent, params: { handleId: string, chunks: Array<{ offset: number, data: ArrayBuffer }> }): Promise<void> {
+    return this.handleAsync<void>(async () => {
+      const { handleId, chunks } = params;
+      
+      const fileHandle = this.fileHandles.get(handleId);
+      if (!fileHandle) {
+        throw new Error(`File handle ${handleId} not found`);
+      }
+      
+      // 按偏移量排序，确保顺序写入
+      chunks.sort((a, b) => a.offset - b.offset);
+      
+      // 批量写入所有块
+      for (const chunk of chunks) {
+        const buffer = Buffer.from(chunk.data);
+        await fileHandle.write(buffer, 0, buffer.length, chunk.offset);
+      }
+    }).then(response => {
+      if (!response.success) {
+        throw new Error(response.error!);
+      }
+      return response.data!;
+    });
+  }
+  
   async appendArrayBufferToFile(event: IpcMainInvokeEvent, params: { filePath: string, arrayBufferData: ArrayBuffer, position?: number }): Promise<void> {
     return this.handleAsync<void>(async () => {
       const { filePath, arrayBufferData, position } = params;

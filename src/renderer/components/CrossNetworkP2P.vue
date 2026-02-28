@@ -955,6 +955,116 @@ const adaptiveAdjustBufferSize = (peerId: string): number => {
   return Math.max(perf.currentBufferSize, 4 * 1024 * 1024); // 确保最小缓冲区大小为4MB
 };
 
+// 智能块大小调整
+const getOptimalChunkSize = (peerId: string, fileSize: number): number => {
+  const perf = networkPerformance.get(peerId);
+  
+  // 基础块大小
+  let baseChunkSize = 65536; // 64KB
+  
+  // 大文件使用更大的块
+  if (fileSize > 100 * 1024 * 1024) {
+    baseChunkSize = 256 * 1024; // 256KB
+  } else if (fileSize > 500 * 1024 * 1024) {
+    baseChunkSize = 512 * 1024; // 512KB
+  }
+  
+  // 根据网络状况调整
+  if (perf) {
+    const latency = perf.latency || 100;
+    const throughput = perf.throughput || 1 * 1024 * 1024; // 默认1MB/s
+    
+    // 低延迟、高带宽网络使用更大的块
+    if (latency < 100 && throughput > 5 * 1024 * 1024) {
+      baseChunkSize *= 2;
+    }
+    // 高延迟网络使用更小的块
+    else if (latency > 300) {
+      baseChunkSize = Math.max(32768, baseChunkSize / 2); // 最小32KB
+    }
+  }
+  
+  // 限制块大小范围
+  return Math.min(Math.max(32768, baseChunkSize), 1048576); // 32KB - 1MB
+};
+
+// 通道负载均衡器
+class ChannelLoadBalancer {
+  private channelStats: Map<string, {
+    lastUsed: number;
+    bufferedAmount: number;
+    successCount: number;
+    failCount: number;
+  }> = new Map();
+  
+  // 更新通道状态
+  updateChannelStatus(channelId: string, bufferedAmount: number, success: boolean) {
+    const stats = this.channelStats.get(channelId) || {
+      lastUsed: 0,
+      bufferedAmount: 0,
+      successCount: 0,
+      failCount: 0
+    };
+    
+    stats.lastUsed = Date.now();
+    stats.bufferedAmount = bufferedAmount;
+    if (success) {
+      stats.successCount++;
+    } else {
+      stats.failCount++;
+    }
+    
+    this.channelStats.set(channelId, stats);
+  }
+  
+  // 选择最佳通道
+  selectBestChannel(channels: RTCDataChannel[]): RTCDataChannel {
+    if (channels.length === 1) {
+      return channels[0];
+    }
+    
+    let bestChannel = channels[0];
+    let bestScore = -Infinity;
+    
+    channels.forEach((channel, index) => {
+      const channelId = `${channel.label || index}`;
+      const stats = this.channelStats.get(channelId) || {
+        lastUsed: 0,
+        bufferedAmount: 0,
+        successCount: 0,
+        failCount: 0
+      };
+      
+      // 计算通道得分
+      let score = 0;
+      
+      // 缓冲区越小得分越高
+      const bufferScore = Math.max(0, 100 - (stats.bufferedAmount / (1024 * 1024)));
+      score += bufferScore * 0.5;
+      
+      // 成功率越高得分越高
+      const totalAttempts = stats.successCount + stats.failCount;
+      const successRate = totalAttempts > 0 ? stats.successCount / totalAttempts : 1;
+      score += successRate * 100 * 0.3;
+      
+      // 最近使用时间越久得分越高（负载均衡）
+      const idleTime = Date.now() - stats.lastUsed;
+      const idleScore = Math.min(50, idleTime / 1000);
+      score += idleScore * 0.2;
+      
+      if (score > bestScore) {
+        bestScore = score;
+        bestChannel = channel;
+      }
+    });
+    
+    return bestChannel;
+  }
+}
+
+// 创建全局通道负载均衡器
+const channelLoadBalancer = new ChannelLoadBalancer();
+
 // 自适应调整接收缓冲区大小
 const adaptiveAdjustReceiveBufferSize = (peerId: string): number => {
   const perf = receiveNetworkPerformance.get(peerId);
@@ -1251,6 +1361,10 @@ const handleDataChannelMessage = (message: any, peerId: string) => {
         lastReceivedMetadata.set(peerId, data);
         handleFileChunkMetadata(data, peerId)
         break
+      case 'file-chunk-metadata-batch':
+        // 处理批量元数据
+        handleFileChunkMetadataBatch(data, peerId)
+        break
       case 'file-transfer-complete':
         handleFileTransferComplete(data, peerId)
         break
@@ -1283,6 +1397,77 @@ const handleDataChannelMessage = (message: any, peerId: string) => {
 
 // 存储最近接收到的元数据，用于与二进制数据关联
 const lastReceivedMetadata = new Map<string, any>();
+
+// 批量写入缓冲区配置
+const BATCH_WRITE_THRESHOLD = 10; // 每10个块批量写入一次
+const BATCH_WRITE_TIMEOUT = 100; // 100ms超时后强制写入
+
+// 批量写入缓冲区
+interface WriteBatch {
+  chunks: Array<{
+    offset: number;
+    data: ArrayBuffer;
+  }>;
+  timeout: NodeJS.Timeout;
+  receivedCount: number;
+  totalChunks: number;
+}
+
+const writeBatches = new Map<string, WriteBatch>();
+
+// 批量写入文件块
+const batchWriteChunks = async (transferId: string) => {
+  const batch = writeBatches.get(transferId);
+  if (!batch) return;
+  
+  // 清除超时定时器
+  clearTimeout(batch.timeout);
+  writeBatches.delete(transferId);
+  
+  const storage = receivedFileBlocks.get(transferId);
+  if (!storage || !storage.fileHandleId) {
+    addLog('error', `批量写入失败: 存储或文件句柄未初始化`);
+    return;
+  }
+  
+  try {
+    // 按偏移量排序，确保顺序写入
+    batch.chunks.sort((a, b) => a.offset - b.offset);
+    
+    // 批量写入
+    await window.electronAPI.invoke('file:write-batch', {
+      handleId: storage.fileHandleId,
+      chunks: batch.chunks
+    });
+    
+    // 更新已接收的块
+    batch.chunks.forEach((chunk, index) => {
+      const chunkIndex = Math.floor(chunk.offset / CHUNK_SIZE) + 1;
+      storage.receivedChunkIndexes.add(chunkIndex);
+      storage.totalReceivedBytes += chunk.data.byteLength;
+    });
+    
+    // 更新进度
+    const progress = Math.round((storage.receivedChunkIndexes.size / batch.totalChunks) * 100);
+    const transfer = transfers.value.find(t => t.id === transferId);
+    if (transfer) {
+      transfer.receivedChunks = storage.receivedChunkIndexes.size;
+      transfer.progress = progress;
+      
+      window.dispatchEvent(new CustomEvent('p2p:transfer-progress', {
+        detail: { ...transfer }
+      }));
+    }
+    
+    // 检查是否完成
+    if (storage.receivedChunkIndexes.size === batch.totalChunks) {
+      await finalizeReceivedFile(transferId, storage.fileInfo, batch.totalChunks, '');
+    }
+    
+  } catch (error) {
+    addLog('error', `批量写入失败: ${error}`);
+  }
+};
 
 // 处理文件传输被拒绝
 const handleFileTransferRejected = (data: any, peerId: string) => {
@@ -1418,21 +1603,22 @@ const sendFileChunksStreaming = async (
   transferId: string,
   channels: RTCDataChannel[]
 ) => {
-  const OPTIMIZED_CHUNK_SIZE = fileSize > 100 * 1024 * 1024 ? 256 * 1024 : 65536;
+  const OPTIMIZED_CHUNK_SIZE = getOptimalChunkSize(cleanPeerId, fileSize);
   const optimizedTotalChunks = Math.ceil(fileSize / OPTIMIZED_CHUNK_SIZE);
   const MAX_PENDING_SEND = 40;
   let pendingSends = 0;
   let sentChunks = 0;
   
-  addLog('info', `开始使用 ${channels.length} 个通道流式传输文件: ${fileName}`);
+  addLog('info', `开始使用 ${channels.length} 个通道流式传输文件: ${fileName}，块大小: ${(OPTIMIZED_CHUNK_SIZE / 1024).toFixed(0)}KB`);
   
   const sendChunk = async (chunkIndex: number) => {
     const start = chunkIndex * OPTIMIZED_CHUNK_SIZE;
     const end = Math.min(start + OPTIMIZED_CHUNK_SIZE, fileSize);
     const chunkSize = end - start;
     
-    const channelIndex = chunkIndex % channels.length;
-    const dataChannel = channels[channelIndex];
+    // 使用通道负载均衡器选择最佳通道
+    const dataChannel = channelLoadBalancer.selectBestChannel(channels);
+    const channelIndex = channels.indexOf(dataChannel);
     
     if (!dataChannel || dataChannel.readyState !== 'open') {
       return;
@@ -1459,7 +1645,7 @@ const sendFileChunksStreaming = async (
     pendingSends++;
     
     try {
-      const chunkBuffer = await window.electronAPI.invoke('file:read-array-buffer-range', {
+      const chunkBuffer = await window.electronAPI.invoke('file:read-arraybuffer-range', {
         filePath: filePath,
         start: start,
         length: chunkSize
@@ -1479,6 +1665,9 @@ const sendFileChunksStreaming = async (
       }));
       
       dataChannel.send(chunkBuffer);
+      
+      // 更新通道状态
+      channelLoadBalancer.updateChannelStatus(`${dataChannel.label || channelIndex}`, dataChannel.bufferedAmount, true);
       
       sentChunks++;
       
@@ -1504,6 +1693,10 @@ const sendFileChunksStreaming = async (
       }
     } catch (error) {
       addLog('error', `读取文件块失败: ${error}`);
+      // 更新通道状态（失败）
+      if (dataChannel) {
+        channelLoadBalancer.updateChannelStatus(`${dataChannel.label || channelIndex}`, dataChannel.bufferedAmount, false);
+      }
     } finally {
       pendingSends--;
     }
@@ -2103,9 +2296,109 @@ const handleFileChunkMetadata = async (data: any, peerId: string) => {
   // 不在接收每个块时显示日志，避免日志过多
 }
 
+// 处理批量元数据
+const handleFileChunkMetadataBatch = async (data: any, peerId: string) => {
+  const { transferId, totalChunks, chunkSize, fileInfo, batches } = data
+  
+  let transfer = transfers.value.find(t => t.id === transferId)
+  if (!transfer) {
+    transfer = transfers.value.find(t => 
+      t.fileName === fileInfo?.name && 
+      t.fileSize === fileInfo?.size &&
+      t.direction === 'receive'
+    );
+    
+    if (transfer) {
+      transfer.id = transferId;
+    } else {
+      transfer = {
+        id: transferId,
+        fileName: fileInfo?.name || 'unknown',
+        fileSize: fileInfo?.size || 0,
+        peerId: peerId,
+        direction: 'receive',
+        status: 'in-progress',
+        progress: 0,
+        receivedChunks: 0,
+        totalChunks: totalChunks
+      };
+      transfers.value.push(transfer);
+    }
+  }
+  
+  if (!receivedFileBlocks.has(transferId)) {
+    initReceivedFileBlocks(transferId, fileInfo, totalChunks);
+  }
+  
+  const storage = receivedFileBlocks.get(transferId)!;
+  
+  if (!storage.isInitialized && fileInfo && fileInfo.size) {
+    await initFinalFile(transferId, fileInfo, totalChunks, fileInfo.size);
+  }
+  
+  // 存储批量元数据
+  if (!storage.batchMetadata) {
+    storage.batchMetadata = [];
+  }
+  
+  storage.batchMetadata.push({ batchId: Date.now(), batches, chunkSize });
+  
+  if (transfer) {
+    transfer.totalChunks = totalChunks;
+  }
+  
+  // 为批量元数据创建临时存储，用于后续二进制数据的匹配
+  if (!lastReceivedMetadata.has(peerId)) {
+    lastReceivedMetadata.set(peerId, { ...data, currentBatchIndex: 0, currentChunkIndex: 0 });
+  }
+  
+  // 不在接收每个批次时显示日志，避免日志过多
+}
+
 // 处理二进制数据块
 const handleFileChunkBinary = async (binaryData: ArrayBuffer, metadata: any, peerId: string) => {
-  const { transferId, chunkIndex, totalChunks, fileInfo } = metadata;
+  let transferId: string;
+  let chunkIndex: number;
+  let totalChunks: number;
+  let fileInfo: any;
+  let chunkSize: number;
+  
+  // 检查是否是批量元数据
+  if (metadata.type === 'file-chunk-metadata-batch' && metadata.currentBatchIndex !== undefined) {
+    const { batches, totalChunks: metadataTotalChunks, fileInfo: metadataFileInfo, chunkSize: metadataChunkSize } = metadata;
+    const currentBatch = batches[metadata.currentBatchIndex];
+    
+    if (currentBatch) {
+      transferId = metadata.transferId;
+      chunkIndex = currentBatch.chunkIndex;
+      totalChunks = metadataTotalChunks;
+      fileInfo = metadataFileInfo;
+      chunkSize = currentBatch.chunkSize;
+      
+      // 更新当前批处理索引
+      metadata.currentChunkIndex++;
+      if (metadata.currentChunkIndex >= batches.length) {
+        metadata.currentChunkIndex = 0;
+        metadata.currentBatchIndex++;
+        
+        // 如果所有批次都处理完了，清理元数据
+        if (metadata.currentBatchIndex >= batches.length) {
+          lastReceivedMetadata.delete(peerId);
+        }
+      }
+    } else {
+      // 没有找到对应的批次，清理元数据
+      lastReceivedMetadata.delete(peerId);
+      return;
+    }
+  } else {
+    // 普通元数据
+    transferId = metadata.transferId;
+    chunkIndex = metadata.chunkIndex;
+    totalChunks = metadata.totalChunks;
+    fileInfo = metadata.fileInfo;
+    chunkSize = metadata.chunkSize;
+  }
   
   const storage = receivedFileBlocks.get(transferId);
   if (!storage) {
@@ -2121,6 +2414,7 @@ const handleFileChunkBinary = async (binaryData: ArrayBuffer, metadata: any, pee
   if (!storage.isInitialized) {
     if (fileInfo && fileInfo.size) {
       await initFinalFile(transferId, fileInfo, totalChunks, fileInfo.size);
+      storage.fileInfo = fileInfo;
     } else {
       addLog('error', `无法初始化文件: 缺少文件大小信息`);
       return;
@@ -2135,33 +2429,34 @@ const handleFileChunkBinary = async (binaryData: ArrayBuffer, metadata: any, pee
   try {
     const offset = (chunkIndex - 1) * CHUNK_SIZE;
     
-    await window.electronAPI.invoke('file:write-at-position', {
-      handleId: storage.fileHandleId,
-      arrayBufferData: binaryData,
-      position: offset
-    });
+    // 使用批量写入
+    let batch = writeBatches.get(transferId);
+    if (!batch) {
+      // 创建新的批处理
+      batch = {
+        chunks: [],
+        timeout: setTimeout(() => batchWriteChunks(transferId), BATCH_WRITE_TIMEOUT),
+        receivedCount: 0,
+        totalChunks: totalChunks
+      };
+      writeBatches.set(transferId, batch);
+    }
     
-    storage.receivedChunkIndexes.add(chunkIndex);
+    // 添加到批处理
+    batch.chunks.push({ offset, data: binaryData });
+    batch.receivedCount++;
     
+    // 检查是否达到批量写入阈值
+    if (batch.chunks.length >= BATCH_WRITE_THRESHOLD) {
+      await batchWriteChunks(transferId);
+    }
+    
+    // 更新接收速率
+    updateReceiveRate(peerId, storage.totalReceivedBytes + binaryData.byteLength);
+    
+    // 处理多源下载的块分配
     updateMultiSourceReceivedChunk(transferId, chunkIndex, peerId);
     
-    updateReceiveRate(peerId, storage.totalReceivedBytes + binaryData.byteLength);
-    storage.totalReceivedBytes += binaryData.byteLength;
-    
-    const progress = Math.round((storage.receivedChunkIndexes.size / totalChunks) * 100);
-    const transfer = transfers.value.find(t => t.id === transferId);
-    if (transfer) {
-      transfer.receivedChunks = storage.receivedChunkIndexes.size;
-      transfer.progress = progress;
-      
-      window.dispatchEvent(new CustomEvent('p2p:transfer-progress', {
-        detail: { ...transfer }
-      }));
-    }
-    
-    if (storage.receivedChunkIndexes.size === totalChunks) {
-      await finalizeReceivedFile(transferId, fileInfo, totalChunks, peerId);
-    }
   } catch (error) {
     addLog('error', `处理文件块失败: ${error}`);
   }
@@ -2169,6 +2464,11 @@ const handleFileChunkBinary = async (binaryData: ArrayBuffer, metadata: any, pee
 
 // 完成接收文件
 const finalizeReceivedFile = async (transferId: string, fileInfo: any, totalChunks: number, peerId: string) => {
+  // 处理剩余的批量写入
+  if (writeBatches.has(transferId)) {
+    await batchWriteChunks(transferId);
+  }
+  
   const storage = receivedFileBlocks.get(transferId);
   if (!storage) {
     addLog('error', `找不到传输块存储: ${transferId}`);
@@ -3099,7 +3399,7 @@ const sendFileChunksParallel = async (peerId: string, file: File, transferId: st
   addLog('info', `开始使用 ${channels.length} 个通道传输文件: ${file.name}`);
   
   try {
-    const OPTIMIZED_CHUNK_SIZE = file.size > 100 * 1024 * 1024 ? 256 * 1024 : 65536;
+    const OPTIMIZED_CHUNK_SIZE = getOptimalChunkSize(cleanPeerId, file.size);
     const optimizedTotalChunks = Math.ceil(file.size / OPTIMIZED_CHUNK_SIZE);
     
     const MAX_PENDING_SEND = 40;
@@ -3111,8 +3411,9 @@ const sendFileChunksParallel = async (peerId: string, file: File, transferId: st
       const end = Math.min(start + OPTIMIZED_CHUNK_SIZE, file.size);
       const chunkSize = end - start;
       
-      const channelIndex = chunkIndex % channels.length;
-      const dataChannel = channels[channelIndex];
+      // 使用通道负载均衡器选择最佳通道
+      const dataChannel = channelLoadBalancer.selectBestChannel(channels);
+      const channelIndex = channels.indexOf(dataChannel);
       
       if (!dataChannel || dataChannel.readyState !== 'open') {
         return;
@@ -3139,7 +3440,7 @@ const sendFileChunksParallel = async (peerId: string, file: File, transferId: st
       pendingSends++;
       
       try {
-        const chunkBuffer = await window.electronAPI.invoke('file:read-array-buffer-range', {
+        const chunkBuffer = await window.electronAPI.invoke('file:read-arraybuffer-range', {
           filePath: file.path,
           start: start,
           length: chunkSize
@@ -3159,6 +3460,9 @@ const sendFileChunksParallel = async (peerId: string, file: File, transferId: st
         }));
         
         dataChannel.send(chunkBuffer);
+        
+        // 更新通道状态
+        channelLoadBalancer.updateChannelStatus(`${dataChannel.label || channelIndex}`, dataChannel.bufferedAmount, true);
         
         sentChunks++;
         
@@ -3184,6 +3488,10 @@ const sendFileChunksParallel = async (peerId: string, file: File, transferId: st
         }
       } catch (error) {
         addLog('error', `读取文件块失败: ${error}`);
+        // 更新通道状态（失败）
+        if (dataChannel) {
+          channelLoadBalancer.updateChannelStatus(`${dataChannel.label || channelIndex}`, dataChannel.bufferedAmount, false);
+        }
       } finally {
         pendingSends--;
       }

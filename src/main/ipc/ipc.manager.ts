@@ -261,6 +261,13 @@ export class IpcManager {
             return this.fileHandler.mergeSliceFiles(event, params);
           },
         });
+        
+        this.registerHandler({
+          channel: 'file:write-batch',
+          handler: (event: IpcMainInvokeEvent, params: { handleId: string, chunks: Array<{ offset: number, data: ArrayBuffer }> }): Promise<any> => {
+            return this.fileHandler.writeBatch(event, params);
+          },
+        });
     
 
     
