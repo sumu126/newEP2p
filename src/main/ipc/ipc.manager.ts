@@ -3,7 +3,6 @@ import { SystemInfoHandler } from './system.handler';
 import { ConfigHandler } from './config.handler';
 import { FileHandler } from './file.handler';
 import { WindowHandler } from './window.handler';
-import { FileSaveHandler } from './file-save.handler';
 import { P2PHandler } from './p2p.handler';
 import { IPC_CHANNELS } from '@shared/constants';
 import { ModuleManager } from '../managers/module.manager';
@@ -21,7 +20,6 @@ export class IpcManager {
   private configHandler: ConfigHandler | null = null;
   
   private fileHandler: FileHandler;
-  private fileSaveHandler: FileSaveHandler;
   private windowHandler: WindowHandler;
   private p2pHandler: P2PHandler;
   private moduleManager: ModuleManager;
@@ -33,7 +31,6 @@ export class IpcManager {
     // 初始化处理器
     this.systemInfoHandler = new SystemInfoHandler();
     this.fileHandler = new FileHandler();
-    this.fileSaveHandler = new FileSaveHandler();
     this.windowHandler = new WindowHandler();
     this.p2pHandler = new P2PHandler();
   }
@@ -65,9 +62,6 @@ export class IpcManager {
     
     // 注册文件操作处理器
     this.registerFileHandlers();
-    
-    // 注册文件保存处理器
-    this.registerFileSaveHandlers();
     
     // 注册窗口操作处理器
     this.registerWindowHandlers();
@@ -272,10 +266,6 @@ export class IpcManager {
 
     
 
-  }
-
-  private registerFileSaveHandlers(): void {
-    this.fileSaveHandler.setupHandlers();
   }
 
   private registerWindowHandlers(): void {
