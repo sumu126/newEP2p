@@ -177,95 +177,54 @@ export class IpcManager {
       },
     });
     
-
-        
-        this.registerHandler({
-          channel: IPC_CHANNELS.FILE_SAVE_ARRAYBUFFER_AS_FILE,
-          handler: (event: IpcMainInvokeEvent, params: { filePath: string, arrayBufferData: ArrayBuffer }): Promise<any> => {
-            return this.fileHandler.saveArrayBufferAsFile(event, params);
-          },
-        });
-        
-        this.registerHandler({
-          channel: IPC_CHANNELS.FILE_APPEND_ARRAYBUFFER_TO_FILE,
-          handler: (event: IpcMainInvokeEvent, params: { filePath: string, arrayBufferData: ArrayBuffer, position?: number }): Promise<any> => {
-            return this.fileHandler.appendArrayBufferToFile(event, params);
-          },
-        });
-        
-        this.registerHandler({
-          channel: IPC_CHANNELS.FILE_CREATE_HANDLE,
-          handler: (event: IpcMainInvokeEvent, params: { filePath: string, totalSize: number }): Promise<any> => {
-            return this.fileHandler.createFileHandle(event, params);
-          },
-        });
-        
-        this.registerHandler({
-          channel: IPC_CHANNELS.FILE_WRITE_AT_POSITION,
-          handler: (event: IpcMainInvokeEvent, params: { handleId: string, arrayBufferData: ArrayBuffer, position: number }): Promise<any> => {
-            return this.fileHandler.writeToFileAtPosition(event, params);
-          },
-        });
-        
-        this.registerHandler({
-          channel: IPC_CHANNELS.FILE_CLOSE_HANDLE,
-          handler: (event: IpcMainInvokeEvent, params: { handleId: string }): Promise<any> => {
-            return this.fileHandler.closeFileHandle(event, params);
-          },
-        });
-        
-        this.registerHandler({
-          channel: IPC_CHANNELS.FILE_CREATE_DIRECTORY,
-          handler: (event: IpcMainInvokeEvent, params: { dirPath: string }): Promise<any> => {
-            return this.fileHandler.createDirectory(event, params);
-          },
-        });
-        
-        this.registerHandler({
-          channel: IPC_CHANNELS.FILE_READ_ARRAYBUFFER,
-          handler: (event: IpcMainInvokeEvent, params: { filePath: string }): Promise<any> => {
-            return this.fileHandler.readArrayBuffer(event, params);
-          },
-        });
-        
-        this.registerHandler({
-          channel: 'file:read-arraybuffer-range',
-          handler: (event: IpcMainInvokeEvent, params: { filePath: string, start: number, length: number }): Promise<any> => {
-            return this.fileHandler.readArrayBufferRange(event, params);
-          },
-        });
-        
-        this.registerHandler({
-          channel: IPC_CHANNELS.FILE_DELETE_FILE,
-          handler: (event: IpcMainInvokeEvent, params: { filePath: string }): Promise<any> => {
-            return this.fileHandler.deleteFile(event, params);
-          },
-        });
-        
-        this.registerHandler({
-          channel: IPC_CHANNELS.FILE_MERGE_SLICES,
-          handler: (event: IpcMainInvokeEvent, params: {
-            slicesDir: string;
-            outputPath: string;
-            totalSlices: number;
-            slicePrefix?: string;
-            sliceSuffix?: string;
-            deleteSlices?: boolean;
-          }): Promise<any> => {
-            return this.fileHandler.mergeSliceFiles(event, params);
-          },
-        });
-        
-        this.registerHandler({
-          channel: 'file:write-batch',
-          handler: (event: IpcMainInvokeEvent, params: { handleId: string, chunks: Array<{ offset: number, data: ArrayBuffer }> }): Promise<any> => {
-            return this.fileHandler.writeBatch(event, params);
-          },
-        });
+    this.registerHandler({
+      channel: IPC_CHANNELS.FILE_CREATE_HANDLE,
+      handler: (event: IpcMainInvokeEvent, params: { filePath: string, totalSize: number }): Promise<any> => {
+        return this.fileHandler.createFileHandle(event, params);
+      },
+    });
     
-
+    this.registerHandler({
+      channel: IPC_CHANNELS.FILE_WRITE_AT_POSITION,
+      handler: (event: IpcMainInvokeEvent, params: { handleId: string, arrayBufferData: ArrayBuffer, position: number }): Promise<any> => {
+        return this.fileHandler.writeToFileAtPosition(event, params);
+      },
+    });
     
-
+    this.registerHandler({
+      channel: IPC_CHANNELS.FILE_CLOSE_HANDLE,
+      handler: (event: IpcMainInvokeEvent, params: { handleId: string }): Promise<any> => {
+        return this.fileHandler.closeFileHandle(event, params);
+      },
+    });
+    
+    this.registerHandler({
+      channel: IPC_CHANNELS.FILE_CREATE_DIRECTORY,
+      handler: (event: IpcMainInvokeEvent, params: { dirPath: string }): Promise<any> => {
+        return this.fileHandler.createDirectory(event, params);
+      },
+    });
+    
+    this.registerHandler({
+      channel: 'file:read-arraybuffer-range',
+      handler: (event: IpcMainInvokeEvent, params: { filePath: string, start: number, length: number }): Promise<any> => {
+        return this.fileHandler.readArrayBufferRange(event, params);
+      },
+    });
+    
+    this.registerHandler({
+      channel: IPC_CHANNELS.FILE_DELETE_FILE,
+      handler: (event: IpcMainInvokeEvent, params: { filePath: string }): Promise<any> => {
+        return this.fileHandler.deleteFile(event, params);
+      },
+    });
+    
+    this.registerHandler({
+      channel: 'file:write-batch',
+      handler: (event: IpcMainInvokeEvent, params: { handleId: string, chunks: Array<{ offset: number, data: ArrayBuffer }> }): Promise<any> => {
+        return this.fileHandler.writeBatch(event, params);
+      },
+    });
   }
 
   private registerWindowHandlers(): void {

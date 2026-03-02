@@ -46,19 +46,15 @@ export const IPC_CHANNELS = {
   APP_GET_INFO: 'app:get-info',
   
   // 文件操作通道
-        FILE_READ: 'file:read',
-        FILE_WRITE: 'file:write',
-        FILE_SELECT: 'file:select',
-        FILE_SELECT_DIRECTORY: 'file:select-directory',
-        FILE_SAVE_ARRAYBUFFER_AS_FILE: 'file:save-arraybuffer-as-file',
-        FILE_APPEND_ARRAYBUFFER_TO_FILE: 'file:append-arraybuffer-to-file',
-        FILE_CREATE_HANDLE: 'file:create-handle',
-        FILE_WRITE_AT_POSITION: 'file:write-at-position',
-        FILE_CLOSE_HANDLE: 'file:close-handle',
-        FILE_CREATE_DIRECTORY: 'file:create-directory',
-        FILE_READ_ARRAYBUFFER: 'file:read-arraybuffer',
-        FILE_DELETE_FILE: 'file:delete-file',
-        FILE_MERGE_SLICES: 'file:merge-slices',  // ✅ 流式合并切片文件
+  FILE_READ: 'file:read',
+  FILE_WRITE: 'file:write',
+  FILE_SELECT: 'file:select',
+  FILE_SELECT_DIRECTORY: 'file:select-directory',
+  FILE_CREATE_HANDLE: 'file:create-handle',
+  FILE_WRITE_AT_POSITION: 'file:write-at-position',
+  FILE_CLOSE_HANDLE: 'file:close-handle',
+  FILE_CREATE_DIRECTORY: 'file:create-directory',
+  FILE_DELETE_FILE: 'file:delete-file',
   
   // 系统信息通道
   SYSTEM_INFO: 'system:info',
