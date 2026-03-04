@@ -2682,6 +2682,12 @@ const handleFileChunkMetadata = async (data: any, peerId: string) => {
     }
   }
   
+  // 更新传输状态为传输中（如果当前是连接中状态）
+  if (transfer && transfer.status === 'connecting') {
+    transfer.status = 'transferring';
+    addLog('info', `文件传输开始: ${transfer.fileName}`);
+  }
+  
   if (!receivedFileBlocks.has(transferId)) {
     initReceivedFileBlocks(transferId, fileInfo, totalChunks, peerId, [peerId]);
   }
@@ -2746,6 +2752,12 @@ const handleFileChunkMetadataBatch = async (data: any, peerId: string) => {
       };
       transfers.value.push(transfer);
     }
+  }
+  
+  // 更新传输状态为传输中（如果当前是连接中状态）
+  if (transfer && transfer.status === 'connecting') {
+    transfer.status = 'transferring';
+    addLog('info', `文件传输开始: ${transfer.fileName}`);
   }
   
   if (!receivedFileBlocks.has(transferId)) {
