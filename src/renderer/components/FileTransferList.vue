@@ -122,6 +122,11 @@ const handleTransferErrorFromEvent = (event: Event) => {
 
 // 事件处理
 const handleTransferProgress = (transferInfo: FileTransferInfo) => {
+  // 过滤掉发送方向的传输记录
+  if (transferInfo.direction === 'send') {
+    return
+  }
+  
   const index = transfers.value.findIndex(t => t.id === transferInfo.id)
   if (index >= 0) {
     transfers.value[index] = transferInfo
@@ -131,6 +136,11 @@ const handleTransferProgress = (transferInfo: FileTransferInfo) => {
 }
 
 const handleTransferComplete = (transferInfo: FileTransferInfo) => {
+  // 过滤掉发送方向的传输记录
+  if (transferInfo.direction === 'send') {
+    return
+  }
+  
   const index = transfers.value.findIndex(t => t.id === transferInfo.id)
   if (index >= 0) {
     transfers.value[index] = transferInfo
@@ -138,6 +148,7 @@ const handleTransferComplete = (transferInfo: FileTransferInfo) => {
 }
 
 const handleTransferError = (errorInfo: { fileId: string; error: any }) => {
+  // 找到对应的传输记录
   const index = transfers.value.findIndex(t => t.id === errorInfo.fileId)
   if (index >= 0) {
     transfers.value[index].status = 'error'
