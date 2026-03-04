@@ -213,7 +213,14 @@ const uniqueP2PConnections = computed(() => {
   return p2pConnections.value.filter(conn => {
     // 提取基础对等方ID（去掉通道后缀）
     const peerIdParts = conn.peerId.split('-');
-    const basePeerId = peerIdParts.slice(0, 5).join('-');
+    let basePeerId: string;
+    if (peerIdParts.length >= 5) {
+      // 长ID：使用前5个部分作为基础ID
+      basePeerId = peerIdParts.slice(0, 5).join('-');
+    } else {
+      // 短ID：直接使用完整ID
+      basePeerId = conn.peerId;
+    }
     if (seenPeers.has(basePeerId)) {
       return false; // 已经见过这个对等方，过滤掉
     }
@@ -685,12 +692,9 @@ const createPeerConnection = (peerId: string) => {
   // 使用第一个通道作为主通道
   dataChannels.set(peerId, channels[0])
   
-  // 添加到连接列表
-  p2pConnections.value.push({
-    peerId,
-    isConnected: false,
-    connectionState: 'new'
-  })
+  // 注意：不再在这里直接添加到p2pConnections，而是由updateConnectionStatus处理
+  // 这样可以确保只添加短ID，保持UI一致性
+  addLog('debug', `创建P2P连接: ${peerId}`);
 
   return peerConnection
 }
@@ -1329,19 +1333,46 @@ const handleWebRTCICECandidate = async (data: any) => {
 
 // 更新连接状态
 const updateConnectionStatus = (peerId: string, state: string) => {
-  const connection = p2pConnections.value.find(c => c.peerId === peerId)
-  if (connection) {
-    connection.connectionState = state
-    connection.isConnected = state === 'connected'
-  } else {
-    p2pConnections.value.push({
-      peerId,
-      connectionState: state,
-      isConnected: state === 'connected'
-    })
-  }
-  
+  // 提取短ID（8位）
+  const peerIdParts = peerId.split('-');
+  const shortPeerId = peerIdParts[0];
 
+  // 先尝试找到短ID的连接
+  let connection = p2pConnections.value.find(c => c.peerId === shortPeerId);
+  // 如果找不到，再尝试找到完整ID的连接
+  if (!connection) {
+    connection = p2pConnections.value.find(c => c.peerId === peerId);
+  }
+
+  if (connection) {
+    connection.connectionState = state;
+    connection.isConnected = state === 'connected';
+    addLog('debug', `更新连接状态: ${connection.peerId} -> ${state}`);
+
+    // 如果连接已断开，从列表中移除
+    if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+      const initialLength = p2pConnections.value.length;
+      p2pConnections.value = p2pConnections.value.filter(c => c.peerId !== connection!.peerId);
+      if (p2pConnections.value.length < initialLength) {
+        addLog('info', `连接已断开，从列表中移除: ${connection.peerId}`);
+      }
+    }
+  } else {
+    // 只有在连接状态不是断开时才添加新连接
+    if (state !== 'disconnected' && state !== 'failed' && state !== 'closed') {
+      // 只添加短ID到连接列表，保持UI一致性
+      p2pConnections.value.push({
+        peerId: shortPeerId,
+        connectionState: state,
+        isConnected: state === 'connected'
+      });
+      addLog('debug', `添加新连接: ${shortPeerId} (状态: ${state})`);
+    } else {
+      addLog('debug', `连接状态为${state}，不添加到列表: ${shortPeerId}`);
+    }
+  }
+
+  addLog('debug', `当前连接列表: ${JSON.stringify(p2pConnections.value.map(conn => conn.peerId))}`);
 }
 
 // 处理数据通道消息
@@ -1484,6 +1515,11 @@ const batchWriteChunks = async (transferId: string) => {
     if (storage.receivedChunkIndexes.size === batch.totalChunks) {
       // 使用存储的源节点ID进行断链
       const sourcePeerId = storage.sourcePeerId || '';
+      addLog('debug', `批量写入完成，sourcePeerId: ${sourcePeerId}, sourceNodes: ${JSON.stringify(storage.sourceNodes)}`);
+      if (!sourcePeerId && (!storage.sourceNodes || storage.sourceNodes.length === 0)) {
+        addLog('error', `无法获取源节点ID，无法完成断链`);
+        return;
+      }
       await finalizeReceivedFile(transferId, storage.fileInfo, batch.totalChunks, sourcePeerId);
     }
     
@@ -1507,7 +1543,13 @@ const handleFileTransferRejected = (data: any, peerId: string) => {
 // 传输完成后断链：关闭所有与该传输相关的数据通道
 const disconnectDataChannelsAfterTransfer = async (peerId: string, transferId: string, allSourceNodes?: string[]) => {
   try {
-    addLog('info', `开始断链处理: ${peerId}, 传输ID: ${transferId}`);
+    addLog('info', `开始断链处理: peerId=${peerId}, 传输ID: ${transferId}, allSourceNodes=${JSON.stringify(allSourceNodes)}`);
+    
+    // 检查peerId是否有效
+    if (!peerId) {
+      addLog('error', `断链失败: peerId为空`);
+      return;
+    }
     
     // 检查是否为多源下载
     const multiSourceState = multiSourceDownloads.get(transferId);
@@ -1531,15 +1573,20 @@ const disconnectDataChannelsAfterTransfer = async (peerId: string, transferId: s
       addLog('info', `使用传入的节点列表，将关闭所有 ${allSourceNodes.length} 个节点的数据通道`);
       
       for (const nodeId of allSourceNodes) {
-        await disconnectNodeDataChannels(nodeId, transferId);
-        // 清理主动关闭标记
-        intentionallyClosedChannels.delete(nodeId);
+        if (nodeId) {
+          await disconnectNodeDataChannels(nodeId, transferId);
+          // 清理主动关闭标记
+          intentionallyClosedChannels.delete(nodeId);
+        } else {
+          addLog('warning', `跳过空的nodeId`);
+        }
       }
       
       // 清理传输完成Promise
       transferCompletionPromises.delete(transferId);
     } else {
       // 单源下载：关闭单个节点的数据通道
+      addLog('info', `单源下载，关闭节点: ${peerId}`);
       await disconnectNodeDataChannels(peerId, transferId);
       // 清理主动关闭标记
       intentionallyClosedChannels.delete(peerId);
@@ -1563,11 +1610,30 @@ const disconnectNodeDataChannels = async (nodeId: string, transferId: string) =>
     // 标记为主动关闭，防止触发重连（在发送通知前标记，确保发送过程中不会触发重连）
     intentionallyClosedChannels.add(nodeId);
     
+    // 提取完整的UUID前缀（前5个部分）
+    const nodeIdParts = nodeId.split('-');
+    const basePeerId = nodeIdParts.slice(0, 5).join('-');
+    addLog('debug', `节点基础ID: ${basePeerId}`);
+    
     // 先发送断链通知给发送端（通过所有可用的数据通道发送）
     let notificationSent = false;
     
-    // 1. 尝试通过主数据通道发送
-    const primaryChannel = dataChannels.get(nodeId);
+    // 1. 尝试通过主数据通道发送（尝试多种可能的key）
+    let primaryChannel = dataChannels.get(nodeId);
+    if (!primaryChannel) {
+      primaryChannel = dataChannels.get(basePeerId);
+    }
+    // 尝试查找以basePeerId开头的任何通道
+    if (!primaryChannel) {
+      for (const [channelId, channel] of dataChannels.entries()) {
+        if (channelId.startsWith(basePeerId) && channel.readyState === 'open') {
+          primaryChannel = channel;
+          addLog('debug', `找到匹配的数据通道: ${channelId}`);
+          break;
+        }
+      }
+    }
+    
     if (primaryChannel && primaryChannel.readyState === 'open') {
       try {
         primaryChannel.send(JSON.stringify({
@@ -1583,7 +1649,10 @@ const disconnectNodeDataChannels = async (nodeId: string, transferId: string) =>
     }
     
     // 2. 尝试通过多通道传输中的并行通道发送
-    const multiChannels = multiDataChannels.get(nodeId);
+    let multiChannels = multiDataChannels.get(nodeId);
+    if (!multiChannels) {
+      multiChannels = multiDataChannels.get(basePeerId);
+    }
     if (multiChannels && multiChannels.length > 0) {
       for (const channel of multiChannels) {
         if (channel.readyState === 'open') {
@@ -1612,7 +1681,7 @@ const disconnectNodeDataChannels = async (nodeId: string, transferId: string) =>
     // 3. 关闭主数据通道
     if (primaryChannel && primaryChannel.readyState === 'open') {
       primaryChannel.close();
-      addLog('debug', `已关闭主数据通道: ${nodeId}`);
+      addLog('debug', `已关闭主数据通道`);
     }
     
     // 4. 关闭多通道传输中的并行通道
@@ -1631,36 +1700,75 @@ const disconnectNodeDataChannels = async (nodeId: string, transferId: string) =>
       
       // 清理多通道存储
       multiDataChannels.delete(nodeId);
+      multiDataChannels.delete(basePeerId);
     }
     
-    // 5. 关闭P2P连接
-    const peerConnection = peerConnections.get(nodeId);
+    // 5. 关闭P2P连接（尝试多种可能的key）
+    let peerConnection = peerConnections.get(nodeId);
+    if (!peerConnection) {
+      peerConnection = peerConnections.get(basePeerId);
+    }
     if (peerConnection) {
       peerConnection.close();
       addLog('info', `已关闭P2P连接: ${nodeId}`);
     }
     
-    // 6. 更新UI连接状态 - 从连接列表中移除（使用完整UUID前缀匹配）
-    // 提取完整的UUID前缀（前5个部分）
-    const nodeIdParts = nodeId.split('-');
-    const basePeerId = nodeIdParts.slice(0, 5).join('-');
+    // 6. 更新UI连接状态 - 从连接列表中移除（支持短ID和长ID匹配）
     const initialLength = p2pConnections.value.length;
-    p2pConnections.value = p2pConnections.value.filter(conn => {
+    // 提取短ID（8位）
+    const shortPeerId = nodeIdParts[0];
+    const filteredConnections = p2pConnections.value.filter(conn => {
+      // 检查是否匹配短ID（8位）
+      if (conn.peerId === shortPeerId) {
+        addLog('debug', `匹配短ID: ${conn.peerId}`);
+        return false; // 移除这个连接
+      }
+      // 检查是否匹配长ID的基础部分（前5个部分）
       const connPeerIdParts = conn.peerId.split('-');
-      const connBaseId = connPeerIdParts.slice(0, 5).join('-');
-      return connBaseId !== basePeerId;
+      if (connPeerIdParts.length >= 5) {
+        const connBaseId = connPeerIdParts.slice(0, 5).join('-');
+        if (connBaseId === basePeerId) {
+          addLog('debug', `匹配长ID基础部分: ${conn.peerId} -> ${connBaseId}`);
+          return false; // 移除这个连接
+        }
+      }
+      // 检查是否以basePeerId开头（处理带后缀的通道ID）
+      if (conn.peerId.startsWith(basePeerId)) {
+        addLog('debug', `匹配带后缀的通道ID: ${conn.peerId}`);
+        return false; // 移除这个连接
+      }
+      return true; // 保留这个连接
     });
+    
+    p2pConnections.value = filteredConnections;
+    
+    addLog('debug', `过滤前连接数: ${initialLength}, 过滤后连接数: ${p2pConnections.value.length}`);
+    addLog('debug', `当前连接列表: ${JSON.stringify(p2pConnections.value.map(conn => conn.peerId))}`);
+    
     if (p2pConnections.value.length < initialLength) {
-      addLog('info', `已从UI连接列表中移除: ${nodeId} (基础ID: ${basePeerId})`);
+      addLog('info', `已从UI连接列表中移除: ${nodeId} (短ID: ${shortPeerId}, 基础ID: ${basePeerId})`);
     }
     
     // 7. 停止自适应缓冲区调整任务
     stopAdaptiveBufferSizeTask(nodeId);
+    stopAdaptiveBufferSizeTask(basePeerId);
     
-    // 8. 清理存储
+    // 8. 清理存储（删除所有匹配的key）
+    // 删除主数据通道（多种可能的key）
     dataChannels.delete(nodeId);
+    dataChannels.delete(basePeerId);
+    // 删除所有以basePeerId开头的通道
+    for (const key of dataChannels.keys()) {
+      if (key.startsWith(basePeerId)) {
+        dataChannels.delete(key);
+        addLog('debug', `已删除数据通道记录: ${key}`);
+      }
+    }
+    
     peerConnections.delete(nodeId);
+    peerConnections.delete(basePeerId);
     lastReceivedMetadata.delete(nodeId);
+    lastReceivedMetadata.delete(basePeerId);
     
     addLog('debug', `节点 ${nodeId} 的数据通道和P2P连接关闭完成`);
     
@@ -1706,8 +1814,10 @@ const handleFileTransferConfirmed = async (data: any, peerId: string) => {
     // 从映射中删除已处理的Promise
     transferCompletionPromises.delete(transferId);
     
-    // 发送端传输完成后也断链
-    await disconnectDataChannelsAfterTransfer(peerId, transferId);
+    // 注意：发送端不在这里主动断链，而是等待接收端的断链通知
+    // 接收端在 finalizeReceivedFile 中会发送 disconnect-notification
+    // 发送端在 handleDisconnectNotification 中处理断链
+    addLog('info', `发送端等待接收端断链通知: ${transferId}`);
     
   } else {
     addLog('warning', `未找到对应的传输完成确认Promise: ${transferId}`);
@@ -1773,15 +1883,38 @@ const handleDisconnectNotification = async (data: any, peerId: string) => {
     addLog('info', `已关闭P2P连接: ${peerId}`);
   }
   
-  // 4. 更新UI连接状态 - 从连接列表中移除（使用完整UUID前缀匹配）
+  // 4. 更新UI连接状态 - 从连接列表中移除（支持短ID和长ID匹配）
   const initialLength = p2pConnections.value.length;
-  p2pConnections.value = p2pConnections.value.filter(conn => {
+  const filteredConnections = p2pConnections.value.filter(conn => {
+    // 检查是否匹配短ID（8位）
+    if (conn.peerId === shortPeerId) {
+      addLog('debug', `匹配短ID: ${conn.peerId}`);
+      return false; // 移除这个连接
+    }
+    // 检查是否匹配长ID的基础部分（前5个部分）
     const connPeerIdParts = conn.peerId.split('-');
-    const connBaseId = connPeerIdParts.slice(0, 5).join('-');
-    return connBaseId !== basePeerId;
+    if (connPeerIdParts.length >= 5) {
+      const connBaseId = connPeerIdParts.slice(0, 5).join('-');
+      if (connBaseId === basePeerId) {
+        addLog('debug', `匹配长ID基础部分: ${conn.peerId} -> ${connBaseId}`);
+        return false; // 移除这个连接
+      }
+    }
+    // 检查是否以basePeerId开头（处理带后缀的通道ID）
+    if (conn.peerId.startsWith(basePeerId)) {
+      addLog('debug', `匹配带后缀的通道ID: ${conn.peerId}`);
+      return false; // 移除这个连接
+    }
+    return true; // 保留这个连接
   });
+  
+  p2pConnections.value = filteredConnections;
+  
+  addLog('debug', `过滤前连接数: ${initialLength}, 过滤后连接数: ${p2pConnections.value.length}`);
+  addLog('debug', `当前连接列表: ${JSON.stringify(p2pConnections.value.map(conn => conn.peerId))}`);
+  
   if (p2pConnections.value.length < initialLength) {
-    addLog('info', `已从UI连接列表中移除: ${peerId} (基础ID: ${basePeerId})`);
+    addLog('info', `已从UI连接列表中移除: ${peerId} (短ID: ${shortPeerId}, 基础ID: ${basePeerId})`);
   }
   
   // 5. 停止自适应缓冲区调整任务
@@ -2332,12 +2465,12 @@ const handleFileTransferStart = async (data: any, peerId: string) => {
   const { transferId, fileInfo, totalChunks } = data
   addLog('info', `收到文件传输开始信号: ${fileInfo.name}`)
   
-  initReceivedFileBlocks(transferId, fileInfo, totalChunks, peerId);
-  
+  initReceivedFileBlocks(transferId, fileInfo, totalChunks, peerId, [peerId]);
+
   if (fileInfo && fileInfo.size) {
     await initFinalFile(transferId, fileInfo, totalChunks, fileInfo.size);
   }
-  
+
   acceptFileTransfer();
   
   addLog('info', `自动接受来自 ${peerId.substring(0, 6)} 的下载文件: ${fileInfo.name}`)
@@ -2550,15 +2683,15 @@ const handleFileChunkMetadata = async (data: any, peerId: string) => {
   }
   
   if (!receivedFileBlocks.has(transferId)) {
-    initReceivedFileBlocks(transferId, fileInfo, totalChunks);
+    initReceivedFileBlocks(transferId, fileInfo, totalChunks, peerId, [peerId]);
   }
-  
+
   const storage = receivedFileBlocks.get(transferId)!;
-  
+
   if (!storage.isInitialized && fileInfo && fileInfo.size) {
     await initFinalFile(transferId, fileInfo, totalChunks, fileInfo.size);
   }
-  
+
   // 检查是否已经处理过这个块
   const isDuplicate = storage.metadata.some(m => m.index === chunkIndex);
   if (isDuplicate) {
@@ -2616,20 +2749,20 @@ const handleFileChunkMetadataBatch = async (data: any, peerId: string) => {
   }
   
   if (!receivedFileBlocks.has(transferId)) {
-    initReceivedFileBlocks(transferId, fileInfo, totalChunks);
+    initReceivedFileBlocks(transferId, fileInfo, totalChunks, peerId, [peerId]);
   }
-  
+
   const storage = receivedFileBlocks.get(transferId)!;
-  
+
   if (!storage.isInitialized && fileInfo && fileInfo.size) {
     await initFinalFile(transferId, fileInfo, totalChunks, fileInfo.size);
   }
-  
+
   // 存储批量元数据
   if (!storage.batchMetadata) {
     storage.batchMetadata = [];
   }
-  
+
   storage.batchMetadata.push({ batchId: Date.now(), batches, chunkSize });
   
   if (transfer) {
@@ -2764,6 +2897,19 @@ const finalizeReceivedFile = async (transferId: string, fileInfo: any, totalChun
     return;
   }
   
+  // 获取源节点信息（在删除storage之前保存）
+  const sourceNodes = storage.sourceNodes || [];
+  const sourcePeerId = storage.sourcePeerId || '';
+  // 使用peerId（传入的参数）或sourcePeerId，优先使用传入的peerId
+  const effectivePeerId = peerId || sourcePeerId;
+  
+  addLog('debug', `finalizeReceivedFile: peerId=${peerId}, sourcePeerId=${sourcePeerId}, effectivePeerId=${effectivePeerId}, sourceNodes=${JSON.stringify(sourceNodes)}`);
+  
+  if (!effectivePeerId && sourceNodes.length === 0) {
+    addLog('error', `无法获取有效的peerId或sourceNodes，无法完成断链`);
+    return;
+  }
+  
   try {
     if (storage.fileHandleId) {
       await window.electronAPI.invoke('file:close-handle', {
@@ -2788,7 +2934,7 @@ const finalizeReceivedFile = async (transferId: string, fileInfo: any, totalChun
     addLog('success', `文件下载完成: ${storage.finalFilePath}`);
     
     // 向发送端发送传输完成确认
-    const primaryChannel = dataChannels.get(peerId);
+    const primaryChannel = dataChannels.get(effectivePeerId);
     if (primaryChannel && primaryChannel.readyState === 'open') {
       primaryChannel.send(JSON.stringify({
         type: 'file-transfer-confirmed',
@@ -2798,7 +2944,7 @@ const finalizeReceivedFile = async (transferId: string, fileInfo: any, totalChun
       addLog('info', `已向发送端确认传输完成: ${transferId}`);
     } else {
       // 如果主通道不可用，尝试从multiDataChannels中获取通道
-      const channels = multiDataChannels.get(peerId);
+      const channels = multiDataChannels.get(effectivePeerId);
       if (channels && channels.length > 0) {
         const primaryChannel = channels[0];
         if (primaryChannel.readyState === 'open') {
@@ -2813,14 +2959,14 @@ const finalizeReceivedFile = async (transferId: string, fileInfo: any, totalChun
     }
     
     // 传输完成后断链：关闭所有数据通道
-    // 使用storage.sourceNodes（多源下载时包含所有节点）
-    await disconnectDataChannelsAfterTransfer(peerId, transferId, storage.sourceNodes);
+    // 使用sourceNodes（多源下载时包含所有节点）
+    await disconnectDataChannelsAfterTransfer(effectivePeerId, transferId, sourceNodes);
     
   } catch (error) {
     addLog('error', `保存文件失败: ${error}`);
     
     // 向发送端发送失败确认
-    const primaryChannel = dataChannels.get(peerId);
+    const primaryChannel = dataChannels.get(effectivePeerId);
     if (primaryChannel && primaryChannel.readyState === 'open') {
       primaryChannel.send(JSON.stringify({
         type: 'file-transfer-confirmed',
@@ -2830,7 +2976,7 @@ const finalizeReceivedFile = async (transferId: string, fileInfo: any, totalChun
       addLog('info', `已向发送端确认传输失败: ${transferId}`);
     } else {
       // 如果主通道不可用，尝试从multiDataChannels中获取通道
-      const channels = multiDataChannels.get(peerId);
+      const channels = multiDataChannels.get(effectivePeerId);
       if (channels && channels.length > 0) {
         const primaryChannel = channels[0];
         if (primaryChannel.readyState === 'open') {
@@ -2845,7 +2991,7 @@ const finalizeReceivedFile = async (transferId: string, fileInfo: any, totalChun
     }
     
     // 传输失败时也断链
-    await disconnectDataChannelsAfterTransfer(peerId, transferId, storage.sourceNodes);
+    await disconnectDataChannelsAfterTransfer(effectivePeerId, transferId, sourceNodes);
     
     // 更新传输状态
     const transfer = transfers.value.find(t => t.id === transferId);
@@ -3305,8 +3451,8 @@ const startFileDownload = async (fileHash: string, fileName: string, fileSize: n
   }
   
   const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
-  initReceivedFileBlocks(transferId!, { name: fileName, size: fileSize }, totalChunks);
-  
+  initReceivedFileBlocks(transferId!, { name: fileName, size: fileSize }, totalChunks, targetUserId, [targetUserId]);
+
   try {
     await initFinalFile(transferId!, { name: fileName, size: fileSize }, totalChunks, fileSize);
   } catch (error) {
@@ -3466,13 +3612,14 @@ const removeFileTransferEventListeners = () => {
 
 const acceptFileTransfer = async () => {
   if (!fileTransferRequest.value.fromUserId) return
-  
+
   const transferId = fileTransferRequest.value.transferId || generateTransferId()
   const fileInfo = fileTransferRequest.value.fileInfo;
   const totalChunks = Math.ceil(fileInfo.size / 16384);
-  
-  initReceivedFileBlocks(transferId, fileInfo, totalChunks);
-  
+  const fromUserId = fileTransferRequest.value.fromUserId;
+
+  initReceivedFileBlocks(transferId, fileInfo, totalChunks, fromUserId, [fromUserId]);
+
   await initFinalFile(transferId, fileInfo, totalChunks, fileInfo.size);
   
   const transfer = {
