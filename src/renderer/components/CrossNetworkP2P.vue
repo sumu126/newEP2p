@@ -212,7 +212,8 @@ const uniqueP2PConnections = computed(() => {
   const seenPeers = new Set<string>();
   return p2pConnections.value.filter(conn => {
     // 提取基础对等方ID（去掉通道后缀）
-    const basePeerId = conn.peerId.split('-')[0];
+    const peerIdParts = conn.peerId.split('-');
+    const basePeerId = peerIdParts.slice(0, 5).join('-');
     if (seenPeers.has(basePeerId)) {
       return false; // 已经见过这个对等方，过滤掉
     }
@@ -1639,15 +1640,18 @@ const disconnectNodeDataChannels = async (nodeId: string, transferId: string) =>
       addLog('info', `已关闭P2P连接: ${nodeId}`);
     }
     
-    // 6. 更新UI连接状态 - 从连接列表中移除（使用基础peerId匹配）
-    const basePeerId = nodeId.split('-')[0];
+    // 6. 更新UI连接状态 - 从连接列表中移除（使用完整UUID前缀匹配）
+    // 提取完整的UUID前缀（前5个部分）
+    const nodeIdParts = nodeId.split('-');
+    const basePeerId = nodeIdParts.slice(0, 5).join('-');
     const initialLength = p2pConnections.value.length;
     p2pConnections.value = p2pConnections.value.filter(conn => {
-      const connBaseId = conn.peerId.split('-')[0];
+      const connPeerIdParts = conn.peerId.split('-');
+      const connBaseId = connPeerIdParts.slice(0, 5).join('-');
       return connBaseId !== basePeerId;
     });
     if (p2pConnections.value.length < initialLength) {
-      addLog('info', `已从UI连接列表中移除: ${nodeId}`);
+      addLog('info', `已从UI连接列表中移除: ${nodeId} (基础ID: ${basePeerId})`);
     }
     
     // 7. 停止自适应缓冲区调整任务
@@ -1719,8 +1723,12 @@ const handleDisconnectNotification = async (data: any, peerId: string) => {
   intentionallyClosedChannels.add(peerId);
   
   // 获取基础peerId（用于匹配所有相关通道）
-  const basePeerId = peerId.split('-')[0];
-  addLog('debug', `处理断链通知，基础peerId: ${basePeerId}`);
+  // 提取完整的UUID前缀（前5个部分）
+  const peerIdParts = peerId.split('-');
+  const basePeerId = peerIdParts.slice(0, 5).join('-');
+  // 提取8位短ID（与UI显示一致）
+  const shortPeerId = peerIdParts[0];
+  addLog('debug', `处理断链通知，基础peerId: ${basePeerId}，短ID: ${shortPeerId}`);
   
   // 1. 关闭所有匹配的数据通道（包括带后缀的）
   let closedChannelsCount = 0;
@@ -1765,14 +1773,15 @@ const handleDisconnectNotification = async (data: any, peerId: string) => {
     addLog('info', `已关闭P2P连接: ${peerId}`);
   }
   
-  // 4. 更新UI连接状态 - 从连接列表中移除（使用基础peerId匹配）
+  // 4. 更新UI连接状态 - 从连接列表中移除（使用完整UUID前缀匹配）
   const initialLength = p2pConnections.value.length;
   p2pConnections.value = p2pConnections.value.filter(conn => {
-    const connBaseId = conn.peerId.split('-')[0];
+    const connPeerIdParts = conn.peerId.split('-');
+    const connBaseId = connPeerIdParts.slice(0, 5).join('-');
     return connBaseId !== basePeerId;
   });
   if (p2pConnections.value.length < initialLength) {
-    addLog('info', `已从UI连接列表中移除: ${peerId}`);
+    addLog('info', `已从UI连接列表中移除: ${peerId} (基础ID: ${basePeerId})`);
   }
   
   // 5. 停止自适应缓冲区调整任务
